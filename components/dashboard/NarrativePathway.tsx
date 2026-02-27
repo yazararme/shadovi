@@ -1,16 +1,18 @@
 "use client";
 
+import { useState } from "react";
 import { cn } from "@/lib/utils";
-import { ExternalLink } from "lucide-react";
 import type { LLMModel, QueryIntent, CitedSource } from "@/types";
 
 interface NarrativePathwayProps {
   queryText: string;
-  model: LLMModel;
+  models: LLMModel[];
   intent: QueryIntent;
   citedSources: CitedSource[];
   competitorsMentioned: string[];
   clientId?: string;
+  /** When provided, renders a "View response →" button at bottom-right of the card */
+  onViewResponse?: () => void;
 }
 
 const MODEL_COLORS: Record<LLMModel, string> = {
@@ -36,14 +38,40 @@ const INTENT_LABELS: Record<QueryIntent, string> = {
   validation: "Validation",
 };
 
+import { ChevronRight } from "lucide-react";
+
+// Favicon with Google S2 fallback and initial-letter last resort
+function FaviconImg({ domain }: { domain: string }) {
+  const [errored, setErrored] = useState(false);
+  const src = `https://www.google.com/s2/favicons?domain=${domain}&sz=16`;
+  if (errored) {
+    return (
+      <div className="w-4 h-4 rounded-sm bg-[#E2E8F0] flex items-center justify-center shrink-0">
+        <span className="text-[8px] font-bold text-[#6B7280] uppercase">{domain[0]}</span>
+      </div>
+    );
+  }
+  return (
+    // eslint-disable-next-line @next/next/no-img-element
+    <img
+      src={src}
+      alt={domain}
+      width={16}
+      height={16}
+      className="w-4 h-4 rounded-sm shrink-0"
+      onError={() => setErrored(true)}
+    />
+  );
+}
+
 export function NarrativePathway({
   queryText,
-  model,
+  models,
   intent,
   citedSources,
   competitorsMentioned,
+  onViewResponse,
 }: NarrativePathwayProps) {
-  const primarySource = citedSources[0];
 
   return (
     <div className="border rounded-xl p-4 space-y-3 bg-card">
@@ -59,42 +87,28 @@ export function NarrativePathway({
 
       {/* Chain */}
       <div className="flex flex-col gap-2 pl-3 border-l-2 border-[#ef4444]/30">
-        {/* Model */}
-        <div className="flex items-center gap-3">
-          <span className="text-xs text-muted-foreground w-24 shrink-0">via model</span>
-          <span
-            className={cn(
-              "inline-flex items-center rounded border px-2 py-0.5 text-xs font-medium",
-              MODEL_COLORS[model]
-            )}
-          >
-            {MODEL_LABELS[model]}
-          </span>
+        {/* Model(s) */}
+        <div className="flex items-start gap-3">
+          <span className="text-xs text-muted-foreground w-24 shrink-0 mt-0.5">model</span>
+          <div className="flex gap-1 flex-wrap">
+            {models.map((m) => (
+              <span
+                key={m}
+                className={cn(
+                  "inline-flex items-center rounded border px-2 py-0.5 text-xs font-medium",
+                  MODEL_COLORS[m]
+                )}
+              >
+                {MODEL_LABELS[m]}
+              </span>
+            ))}
+          </div>
         </div>
 
-        {/* Cited instead */}
+        {/* Mentioned — competitors that appeared in place of the brand */}
         <div className="flex items-start gap-3">
-          <span className="text-xs text-muted-foreground w-24 shrink-0 mt-0.5">
-            cited instead
-          </span>
-          {primarySource ? (
-            <div className="space-y-0.5">
-              <a
-                href={primarySource.url}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="inline-flex items-center gap-1 text-xs font-medium underline underline-offset-2"
-              >
-                {primarySource.domain}
-                <ExternalLink className="h-3 w-3" />
-              </a>
-              {primarySource.snippet && (
-                <p className="text-xs text-muted-foreground line-clamp-1">
-                  {primarySource.snippet}
-                </p>
-              )}
-            </div>
-          ) : competitorsMentioned.length > 0 ? (
+          <span className="text-xs text-muted-foreground w-24 shrink-0 mt-0.5">mentioned</span>
+          {competitorsMentioned.length > 0 ? (
             <div className="flex gap-1 flex-wrap">
               {competitorsMentioned.map((c) => (
                 <span
@@ -106,12 +120,42 @@ export function NarrativePathway({
               ))}
             </div>
           ) : (
-            <span className="text-xs text-muted-foreground italic">
-              No source captured
+            <span className="inline-flex items-center rounded border border-[#D1D5DB] bg-[#F4F6F9] text-[#9CA3AF] px-2 py-0.5 text-xs font-medium">
+              None
             </span>
           )}
         </div>
 
+        {/* Source — favicon icons for each cited source, lined up horizontally */}
+        <div className="flex items-center gap-3">
+          <span className="text-xs text-muted-foreground w-24 shrink-0">source</span>
+          {citedSources.length > 0 ? (
+            <div className="flex items-center gap-1.5">
+              {citedSources.map((s) => (
+                <div key={s.url} title={s.domain} className="shrink-0">
+                  <FaviconImg domain={s.domain} />
+                </div>
+              ))}
+            </div>
+          ) : (
+            <span className="text-xs text-muted-foreground italic">not available</span>
+          )}
+        </div>
+
+
+        {/* View response link — bottom-right, only when callback provided */}
+        {onViewResponse && (
+          <div className="flex justify-end pt-1">
+            <button
+              type="button"
+              onClick={onViewResponse}
+              className="flex items-center gap-0.5 text-[9px] font-bold uppercase tracking-wide text-[#9CA3AF] hover:text-[#0D0437] transition-colors whitespace-nowrap"
+            >
+              View response
+              <ChevronRight className="h-3 w-3" />
+            </button>
+          </div>
+        )}
       </div>
 
       {/* TODO: wire up to a specific roadmap task ID before re-enabling this link */}

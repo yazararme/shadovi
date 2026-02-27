@@ -22,43 +22,43 @@ const MODEL_LABELS: Record<LLMModel, string> = {
 };
 
 const MODEL_BADGE_ACTIVE: Record<LLMModel, string> = {
-  "gpt-4o":            "bg-[#10a37f]  text-white border-[#10a37f]",
+  "gpt-4o": "bg-[#10a37f]  text-white border-[#10a37f]",
   "claude-sonnet-4-6": "bg-[#b5804a]  text-white border-[#b5804a]",
-  perplexity:          "bg-[#1580c0]  text-white border-[#1580c0]",
-  gemini:              "bg-[#4285f4]  text-white border-[#4285f4]",
-  deepseek:            "bg-[#6366f1]  text-white border-[#6366f1]",
+  perplexity: "bg-[#1580c0]  text-white border-[#1580c0]",
+  gemini: "bg-[#4285f4]  text-white border-[#4285f4]",
+  deepseek: "bg-[#6366f1]  text-white border-[#6366f1]",
 };
 
 const MODEL_BADGE: Record<LLMModel, string> = {
-  "gpt-4o":            "bg-[rgba(16,163,127,0.08)]  text-[#10a37f] border-[rgba(16,163,127,0.2)]",
+  "gpt-4o": "bg-[rgba(16,163,127,0.08)]  text-[#10a37f] border-[rgba(16,163,127,0.2)]",
   "claude-sonnet-4-6": "bg-[rgba(212,162,126,0.08)] text-[#b5804a] border-[rgba(212,162,126,0.2)]",
-  perplexity:          "bg-[rgba(31,182,255,0.08)]  text-[#1580c0] border-[rgba(31,182,255,0.2)]",
-  gemini:              "bg-[rgba(66,133,244,0.08)]  text-[#4285f4] border-[rgba(66,133,244,0.2)]",
-  deepseek:            "bg-[rgba(99,102,241,0.08)]  text-[#6366f1] border-[rgba(99,102,241,0.2)]",
+  perplexity: "bg-[rgba(31,182,255,0.08)]  text-[#1580c0] border-[rgba(31,182,255,0.2)]",
+  gemini: "bg-[rgba(66,133,244,0.08)]  text-[#4285f4] border-[rgba(66,133,244,0.2)]",
+  deepseek: "bg-[rgba(99,102,241,0.08)]  text-[#6366f1] border-[rgba(99,102,241,0.2)]",
 };
 
 const INTENT_LABEL: Record<string, string> = {
-  category:      "Category",
-  comparative:   "Comparative",
-  validation:    "Validation",
+  category: "Category",
+  comparative: "Comparative",
+  validation: "Validation",
   problem_aware: "Awareness",
 };
 
 const INTENT_BADGE: Record<string, string> = {
-  category:     "bg-[rgba(13,4,55,0.06)]    text-[#0D0437]  border-[rgba(13,4,55,0.15)]",
-  comparative:  "bg-[rgba(123,94,167,0.08)] text-[#7B5EA7]  border-[rgba(123,94,167,0.2)]",
-  validation:   "bg-[rgba(26,143,92,0.08)]  text-[#1A8F5C]  border-[rgba(26,143,92,0.2)]",
-  problem_aware:"bg-[rgba(31,182,255,0.08)] text-[#1580c0]  border-[rgba(31,182,255,0.2)]",
-  bait:         "bg-[rgba(245,158,11,0.08)] text-[#B45309]  border-[rgba(245,158,11,0.2)]",
+  category: "bg-[rgba(13,4,55,0.06)]    text-[#0D0437]  border-[rgba(13,4,55,0.15)]",
+  comparative: "bg-[rgba(123,94,167,0.08)] text-[#7B5EA7]  border-[rgba(123,94,167,0.2)]",
+  validation: "bg-[rgba(26,143,92,0.08)]  text-[#1A8F5C]  border-[rgba(26,143,92,0.2)]",
+  problem_aware: "bg-[rgba(31,182,255,0.08)] text-[#1580c0]  border-[rgba(31,182,255,0.2)]",
+  bait: "bg-[rgba(245,158,11,0.08)] text-[#B45309]  border-[rgba(245,158,11,0.2)]",
 };
 
 // Intent tabs in funnel order: Awareness → Category → Comparative → Validation
 const INTENT_TABS: { key: string; label: string }[] = [
-  { key: "all",          label: "All" },
-  { key: "problem_aware",label: "Awareness" },
-  { key: "category",     label: "Category" },
-  { key: "comparative",  label: "Comparative" },
-  { key: "validation",   label: "Validation" },
+  { key: "all", label: "All" },
+  { key: "problem_aware", label: "Awareness" },
+  { key: "category", label: "Category" },
+  { key: "comparative", label: "Comparative" },
+  { key: "validation", label: "Validation" },
 ];
 
 const ALL_MODELS: LLMModel[] = ["gpt-4o", "claude-sonnet-4-6", "perplexity", "gemini", "deepseek"];
@@ -72,46 +72,49 @@ type RunStatus = "completed" | "failed" | "partial";
 
 function getRunStatus(run: TrackingRun): RunStatus {
   if (!run.raw_response) return "failed";
-  if (run.brand_mentioned === null) return "partial";
+  // brand_mentioned is only semantically required for validation intent.
+  // For comparative, category, and problem_aware runs, null means the brand
+  // wasn't mentioned — that's a valid completed state, not a partial one.
+  if (run.query_intent === "validation" && run.brand_mentioned === null) return "partial";
   return "completed";
 }
 
 const STATUS_BADGE: Record<RunStatus, string> = {
   completed: "bg-[rgba(26,143,92,0.08)]  text-[#1A8F5C] border-[rgba(26,143,92,0.2)]",
-  failed:    "bg-[rgba(255,75,110,0.08)] text-[#FF4B6E] border-[rgba(255,75,110,0.2)]",
-  partial:   "bg-[rgba(245,158,11,0.08)] text-[#F59E0B] border-[rgba(245,158,11,0.2)]",
+  failed: "bg-[rgba(255,75,110,0.08)] text-[#FF4B6E] border-[rgba(255,75,110,0.2)]",
+  partial: "bg-[rgba(245,158,11,0.08)] text-[#F59E0B] border-[rgba(245,158,11,0.2)]",
 };
 
 const STATUS_ACTIVE_BADGE: Record<RunStatus | "all", string> = {
-  all:       "bg-[#0D0437] text-white border-[#0D0437]",
+  all: "bg-[#0D0437] text-white border-[#0D0437]",
   completed: "bg-[#1A8F5C] text-white border-[#1A8F5C]",
-  failed:    "bg-[#FF4B6E] text-white border-[#FF4B6E]",
-  partial:   "bg-[#F59E0B] text-white border-[#F59E0B]",
+  failed: "bg-[#FF4B6E] text-white border-[#FF4B6E]",
+  partial: "bg-[#F59E0B] text-white border-[#F59E0B]",
 };
 
 const STATUS_INACTIVE_BADGE: Record<RunStatus | "all", string> = {
-  all:       "bg-white text-[#6B7280] border-[#E2E8F0] hover:border-[#0D0437] hover:text-[#0D0437]",
+  all: "bg-white text-[#6B7280] border-[#E2E8F0] hover:border-[#0D0437] hover:text-[#0D0437]",
   completed: "bg-white text-[#1A8F5C] border-[rgba(26,143,92,0.3)] hover:border-[#1A8F5C]",
-  failed:    "bg-white text-[#FF4B6E] border-[rgba(255,75,110,0.3)] hover:border-[#FF4B6E]",
-  partial:   "bg-white text-[#F59E0B] border-[rgba(245,158,11,0.3)] hover:border-[#F59E0B]",
+  failed: "bg-white text-[#FF4B6E] border-[rgba(255,75,110,0.3)] hover:border-[#FF4B6E]",
+  partial: "bg-white text-[#F59E0B] border-[rgba(245,158,11,0.3)] hover:border-[#F59E0B]",
 };
 
 // ── CSV export column definitions ──────────────────────────────────────────────
 const SELECTABLE_COLUMNS: { key: string; label: string; defaultOn: boolean }[] = [
-  { key: "brand_mentioned",               label: "Brand Mentioned",               defaultOn: true  },
-  { key: "accuracy",                      label: "Accuracy Score",                defaultOn: true  },
-  { key: "completeness",                  label: "Completeness Score",            defaultOn: true  },
-  { key: "hallucination",                 label: "Hallucination Flag",            defaultOn: true  },
-  { key: "brand_positioning",             label: "Brand Positioning",             defaultOn: true  },
-  { key: "run_status",                    label: "Run Status",                    defaultOn: true  },
-  { key: "raw_response",                  label: "Response Text",                 defaultOn: false },
-  { key: "is_bait",                       label: "Bait Query Flag",               defaultOn: false },
-  { key: "bait_triggered",               label: "Bait Triggered Flag",           defaultOn: false },
-  { key: "citation_present",              label: "Citation Present",              defaultOn: false },
-  { key: "source_attribution",            label: "Source Attribution",            defaultOn: false },
-  { key: "content_age_estimate",          label: "Content Age Estimate",          defaultOn: false },
-  { key: "competitor_mentions_unprompted",label: "Competitor Mentions Unprompted",defaultOn: false },
-  { key: "scorer_model",                  label: "Scorer Model",                  defaultOn: false },
+  { key: "brand_mentioned", label: "Brand Mentioned", defaultOn: true },
+  { key: "accuracy", label: "Accuracy Score", defaultOn: true },
+  { key: "completeness", label: "Completeness Score", defaultOn: true },
+  { key: "hallucination", label: "Hallucination Flag", defaultOn: true },
+  { key: "brand_positioning", label: "Brand Positioning", defaultOn: true },
+  { key: "run_status", label: "Run Status", defaultOn: true },
+  { key: "raw_response", label: "Response Text", defaultOn: false },
+  { key: "is_bait", label: "Bait Query Flag", defaultOn: false },
+  { key: "bait_triggered", label: "Bait Triggered Flag", defaultOn: false },
+  { key: "citation_present", label: "Citation Present", defaultOn: false },
+  { key: "source_attribution", label: "Source Attribution", defaultOn: false },
+  { key: "content_age_estimate", label: "Content Age Estimate", defaultOn: false },
+  { key: "competitor_mentions_unprompted", label: "Competitor Mentions Unprompted", defaultOn: false },
+  { key: "scorer_model", label: "Scorer Model", defaultOn: false },
 ];
 
 const DEFAULT_ON_COLUMNS = new Set(
@@ -258,18 +261,24 @@ function RunsInner() {
         .range(offset, offset + PAGE_SIZE - 1);
 
       if (intent !== "all") runsQuery = runsQuery.eq("query_intent", intent);
-      if (model !== "all")  runsQuery = runsQuery.eq("model", model);
+      if (model !== "all") runsQuery = runsQuery.eq("model", model);
 
-      // Status is derived from raw_response + brand_mentioned:
-      // failed   → no response returned
-      // completed → response received and enrichment finished (brand_mentioned populated)
-      // partial  → response exists but enrichment did not complete (brand_mentioned still null)
+      // Status filter — mirrors getRunStatus() logic:
+      // failed  → no response at all
+      // partial → has a response, is a validation run, brand_mentioned still null (scorer didn't finish)
+      // completed → has a response AND (not validation, OR brand_mentioned is populated)
       if (status === "failed") {
         runsQuery = runsQuery.is("raw_response", null);
-      } else if (status === "completed") {
-        runsQuery = runsQuery.not("raw_response", "is", null).not("brand_mentioned", "is", null);
       } else if (status === "partial") {
-        runsQuery = runsQuery.not("raw_response", "is", null).is("brand_mentioned", null);
+        runsQuery = runsQuery
+          .not("raw_response", "is", null)
+          .eq("query_intent", "validation")
+          .is("brand_mentioned", null);
+      } else if (status === "completed") {
+        // completed = response exists AND (non-validation intent OR brand_mentioned is set)
+        runsQuery = runsQuery
+          .not("raw_response", "is", null)
+          .or("query_intent.neq.validation,brand_mentioned.not.is.null");
       }
 
       const { data: runData, count } = await runsQuery;
@@ -365,10 +374,15 @@ function RunsInner() {
       if (selectedModel !== "all") runsQuery = runsQuery.eq("model", selectedModel);
       if (statusFilter === "failed") {
         runsQuery = runsQuery.is("raw_response", null);
-      } else if (statusFilter === "completed") {
-        runsQuery = runsQuery.not("raw_response", "is", null).not("brand_mentioned", "is", null);
       } else if (statusFilter === "partial") {
-        runsQuery = runsQuery.not("raw_response", "is", null).is("brand_mentioned", null);
+        runsQuery = runsQuery
+          .not("raw_response", "is", null)
+          .eq("query_intent", "validation")
+          .is("brand_mentioned", null);
+      } else if (statusFilter === "completed") {
+        runsQuery = runsQuery
+          .not("raw_response", "is", null)
+          .or("query_intent.neq.validation,brand_mentioned.not.is.null");
       }
 
       const { data: allRuns } = await runsQuery;
@@ -415,23 +429,23 @@ function RunsInner() {
           switch (key) {
             case "brand_mentioned":
               return run.brand_mentioned === null ? "" : run.brand_mentioned ? "true" : "false";
-            case "accuracy":            return score?.accuracy ?? "";
-            case "completeness":        return score?.completeness ?? "";
-            case "hallucination":       return score ? String(score.hallucination) : "";
-            case "brand_positioning":   return run.brand_positioning ?? "";
-            case "run_status":          return status;
-            case "raw_response":        return csvEscape(run.raw_response ?? "");
-            case "is_bait":             return String(queryIsBaitMap.get(run.query_id) ?? false);
-            case "bait_triggered":      return score ? String(score.bait_triggered) : "";
-            case "citation_present":    return run.citation_present === null ? "" : String(run.citation_present);
-            case "source_attribution":  return csvEscape((run.source_attribution ?? []).join("; "));
-            case "content_age_estimate":return csvEscape(run.content_age_estimate ?? "");
+            case "accuracy": return score?.accuracy ?? "";
+            case "completeness": return score?.completeness ?? "";
+            case "hallucination": return score ? String(score.hallucination) : "";
+            case "brand_positioning": return run.brand_positioning ?? "";
+            case "run_status": return status;
+            case "raw_response": return csvEscape(run.raw_response ?? "");
+            case "is_bait": return String(queryIsBaitMap.get(run.query_id) ?? false);
+            case "bait_triggered": return score ? String(score.bait_triggered) : "";
+            case "citation_present": return run.citation_present === null ? "" : String(run.citation_present);
+            case "source_attribution": return csvEscape((run.source_attribution ?? []).join("; "));
+            case "content_age_estimate": return csvEscape(run.content_age_estimate ?? "");
             case "competitor_mentions_unprompted":
               return csvEscape(
                 (run.competitor_mentions_unprompted ?? []).map((c) => c.competitor).join("; ")
               );
             case "scorer_model": return score?.scorer_model ?? "";
-            default:             return "";
+            default: return "";
           }
         });
 
@@ -551,11 +565,10 @@ function RunsInner() {
             <button
               key={key}
               onClick={() => handleIntentChange(key)}
-              className={`flex items-center gap-1.5 text-[9px] font-bold uppercase tracking-wide px-2.5 py-1.5 rounded-full border transition-colors ${
-                active
-                  ? "bg-[#0D0437] text-white border-[#0D0437]"
-                  : "bg-white text-[#6B7280] border-[#E2E8F0] hover:border-[#0D0437] hover:text-[#0D0437]"
-              }`}
+              className={`flex items-center gap-1.5 text-[9px] font-bold uppercase tracking-wide px-2.5 py-1.5 rounded-full border transition-colors ${active
+                ? "bg-[#0D0437] text-white border-[#0D0437]"
+                : "bg-white text-[#6B7280] border-[#E2E8F0] hover:border-[#0D0437] hover:text-[#0D0437]"
+                }`}
             >
               {label}
               <span className={`text-[8px] font-bold tabular-nums ${active ? "text-white/60" : "text-[#9CA3AF]"}`}>
@@ -572,11 +585,10 @@ function RunsInner() {
         <div className="flex items-center gap-1 flex-wrap">
           <button
             onClick={() => handleModelChange("all")}
-            className={`flex items-center gap-1.5 text-[9px] font-bold uppercase tracking-wide px-2.5 py-1.5 rounded-full border transition-colors ${
-              selectedModel === "all"
-                ? "bg-[#0D0437] text-white border-[#0D0437]"
-                : "bg-white text-[#6B7280] border-[#E2E8F0] hover:border-[#0D0437] hover:text-[#0D0437]"
-            }`}
+            className={`flex items-center gap-1.5 text-[9px] font-bold uppercase tracking-wide px-2.5 py-1.5 rounded-full border transition-colors ${selectedModel === "all"
+              ? "bg-[#0D0437] text-white border-[#0D0437]"
+              : "bg-white text-[#6B7280] border-[#E2E8F0] hover:border-[#0D0437] hover:text-[#0D0437]"
+              }`}
           >
             All
             <span className={`text-[8px] font-bold tabular-nums ${selectedModel === "all" ? "text-white/60" : "text-[#9CA3AF]"}`}>
@@ -589,11 +601,10 @@ function RunsInner() {
               <button
                 key={model}
                 onClick={() => handleModelChange(model)}
-                className={`flex items-center gap-1.5 text-[9px] font-bold uppercase tracking-wide px-2.5 py-1.5 rounded-full border transition-colors ${
-                  active
-                    ? MODEL_BADGE_ACTIVE[model]
-                    : "bg-white text-[#6B7280] border-[#E2E8F0] hover:border-[#0D0437] hover:text-[#0D0437]"
-                }`}
+                className={`flex items-center gap-1.5 text-[9px] font-bold uppercase tracking-wide px-2.5 py-1.5 rounded-full border transition-colors ${active
+                  ? MODEL_BADGE_ACTIVE[model]
+                  : "bg-white text-[#6B7280] border-[#E2E8F0] hover:border-[#0D0437] hover:text-[#0D0437]"
+                  }`}
               >
                 {MODEL_LABELS[model]}
                 <span className={`text-[8px] font-bold tabular-nums ${active ? "text-white/60" : "text-[#9CA3AF]"}`}>
@@ -616,9 +627,8 @@ function RunsInner() {
               <button
                 key={val}
                 onClick={() => handleStatusChange(val)}
-                className={`text-[9px] font-bold uppercase tracking-wide px-2 py-1 rounded border transition-colors ${
-                  active ? STATUS_ACTIVE_BADGE[val] : STATUS_INACTIVE_BADGE[val]
-                }`}
+                className={`text-[9px] font-bold uppercase tracking-wide px-2 py-1 rounded border transition-colors ${active ? STATUS_ACTIVE_BADGE[val] : STATUS_INACTIVE_BADGE[val]
+                  }`}
               >
                 {labels[val]}
               </button>
@@ -776,10 +786,12 @@ function RunsInner() {
       {drawer && (
         <ResponseDrawer
           queryText={drawer.queryText}
-          model={drawer.run.model}
-          rawResponse={drawer.run.raw_response}
+          runs={[{
+            model: drawer.run.model,
+            rawResponse: drawer.run.raw_response,
+            competitorsMentioned: drawer.run.competitors_mentioned ?? [],
+          }]}
           brandName={client.brand_name ?? client.url}
-          competitorsMentioned={drawer.run.competitors_mentioned ?? []}
           onClose={() => setDrawer(null)}
         />
       )}
@@ -812,13 +824,16 @@ function RunsInner() {
               </button>
             </div>
 
-            {/* Always-included columns */}
+            {/* Always-included columns — these are never toggleable */}
             <div className="px-5 pt-4 pb-3">
               <p className="text-[9px] font-bold uppercase tracking-[2px] text-[#9CA3AF] mb-2">
                 Always Included
               </p>
               <div className="flex gap-1.5 flex-wrap">
-                {["Query Text", "Intent", "Model", "Run Date"].map((col) => (
+                {[
+                  "Query Text", "Intent", "Model", "Run Date",
+                  ...SELECTABLE_COLUMNS.filter((c) => c.defaultOn).map((c) => c.label),
+                ].map((col) => (
                   <span
                     key={col}
                     className="text-[9px] font-bold uppercase tracking-wide px-2 py-1 rounded border bg-[#F4F6F9] text-[#6B7280] border-[#E2E8F0]"
@@ -832,7 +847,7 @@ function RunsInner() {
             {/* Selectable columns header with select/clear all */}
             <div className="px-5 py-2.5 border-t border-[#E2E8F0] flex items-center justify-between">
               <p className="text-[9px] font-bold uppercase tracking-[2px] text-[#9CA3AF]">
-                Select Columns
+                Optional Columns
               </p>
               <div className="flex items-center gap-3">
                 <button
@@ -843,7 +858,7 @@ function RunsInner() {
                 </button>
                 <span className="text-[#E2E8F0] text-[10px]">|</span>
                 <button
-                  onClick={() => setExportColumns(new Set())}
+                  onClick={() => setExportColumns(new Set(DEFAULT_ON_COLUMNS))}
                   className="text-[9px] font-bold uppercase tracking-wide text-[#9CA3AF] hover:text-[#0D0437]"
                 >
                   Clear all
@@ -851,10 +866,10 @@ function RunsInner() {
               </div>
             </div>
 
-            {/* Column checklist */}
+            {/* Column checklist — only optional columns appear here */}
             <div className="overflow-y-auto flex-1 px-5 pb-2">
               <div className="divide-y divide-[#F4F6F9]">
-                {SELECTABLE_COLUMNS.map(({ key, label, defaultOn }) => {
+                {SELECTABLE_COLUMNS.filter((c) => !c.defaultOn).map(({ key, label }) => {
                   const checked = exportColumns.has(key);
                   return (
                     <label
@@ -876,11 +891,6 @@ function RunsInner() {
                       <span className="flex-1 text-[12px] text-[#374151] group-hover:text-[#0D0437] transition-colors">
                         {label}
                       </span>
-                      {!defaultOn && (
-                        <span className="text-[8px] font-bold uppercase tracking-wide text-[#D1D5DB]">
-                          optional
-                        </span>
-                      )}
                     </label>
                   );
                 })}

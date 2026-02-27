@@ -1,10 +1,5 @@
 # CLAUDE.md — Shadovi AEO Tracker
 
-## Project Overview
-Shadovi tracks brand visibility across LLMs (ChatGPT, Claude, Perplexity).
-Core value: show clients they have **zero or low or improvable LLM visibility** before competitors do.
-Dual use: SaaS product + consulting deliverable for founders.
-
 
 ## Coding Rules
 - Prefer small, focused diffs — no unrequested refactors
@@ -14,19 +9,18 @@ Dual use: SaaS product + consulting deliverable for founders.
 - When touching the Chart.js dashboard, preserve the white/off-white 2026 aesthetic
 - Add comments explaining *why*, not just *what*, for non-obvious logic
 
+## Tech Stack
+- Next.js 14, Supabase, Inngest, TypeScript
+
 ## Before Writing Any Code
-1. Describe your approach in bullet points and **wait for approval**
-2. If requirements are ambiguous, ask one clarifying question before proceeding
-3. If changes span more than 3 files, break into smaller tasks and confirm order first
+- Describe approach, wait for approval; ask one clarifying question if ambiguous; break 3+ file changes into smaller tasks
 
 ## After Writing Code
 - List what could break and name the functions/API calls most at risk
 - Suggest a quick manual test or smoke test command to verify
 
 ## Bug Workflow
-1. First, reproduce the bug with a minimal test or print-debug trace
-2. Confirm root cause before touching code
-3. Fix, then verify the original symptom is gone
+- Reproduce → confirm root cause → fix → verify
 
 ## Query Engine Rules (Core IP — Handle Carefully)
 - Query taxonomy: Problem-Aware → Category → Comparative → Validation intent
@@ -36,19 +30,8 @@ Dual use: SaaS product + consulting deliverable for founders.
 - Estimated API cost per full client run: ~$0.21/run → flag if a change inflates this
 
 
-## Self-Updating Rule
-Every time I correct you, add the lesson as a new rule at the bottom of this file
-under a `## Learned Rules` section so it never happens again.
-
 ## SAO - short answer only. 
 Whenever i put SAO in the prompt, it means i want a short answer only - it is a conversation/brainstorming and back and forth with you. do not execute any code or make any changes to the codebase. just answer my question and wait for my next prompt.
-
-## When Compacting
-Always preserve:
-- The full list of modified files
-- Any failing API calls and their error messages
-- The current client being worked on
-- Outstanding tasks not yet implemented
 
 ## Learned Rules
 <!-- Claude appends corrections here over time -->

@@ -4,6 +4,7 @@ import { useEffect, useState, Suspense } from "react";
 import { useSearchParams } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
 import { NarrativePathway } from "@/components/dashboard/NarrativePathway";
+import { ResponseDrawer, type RunOption } from "@/components/dashboard/ResponseDrawer";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { ChevronDown, ChevronUp } from "lucide-react";
@@ -42,24 +43,75 @@ function SubLabel({ children }: { children: React.ReactNode }) {
   );
 }
 
+interface DrawerState {
+  runs: EnrichedRun[];
+  queryText: string;
+}
+
+/** One card per unique query — aggregates all model runs for that query */
+interface GroupedQueryRun {
+  queryId: string;
+  queryText: string;
+  queryIntent: QueryIntent;
+  models: LLMModel[];
+  competitorsMentioned: string[];
+  citedSources: NonNullable<EnrichedRun["cited_sources"]>;
+  /** All gap runs for this query across all models — passed to the response drawer */
+  allRuns: EnrichedRun[];
+}
+
+function groupRunsByQuery(runs: EnrichedRun[]): GroupedQueryRun[] {
+  const map = new Map<string, GroupedQueryRun>();
+  // runs are ordered ran_at DESC — first encounter = latest run per query
+  for (const run of runs) {
+    if (!map.has(run.query_id)) {
+      map.set(run.query_id, {
+        queryId: run.query_id,
+        queryText: run.query_text,
+        queryIntent: run.query_intent,
+        models: [],
+        competitorsMentioned: [],
+        citedSources: [],
+        allRuns: [],
+      });
+    }
+    const g = map.get(run.query_id)!;
+    if (!g.models.includes(run.model)) {
+      g.models.push(run.model);
+      // Keep one run per model (first = latest, since runs are ran_at DESC)
+      g.allRuns.push(run);
+    }
+    for (const c of run.competitors_mentioned ?? []) {
+      if (!g.competitorsMentioned.includes(c)) g.competitorsMentioned.push(c);
+    }
+    for (const s of run.cited_sources ?? []) {
+      if (!g.citedSources.some((x) => x.url === s.url)) g.citedSources.push(s);
+    }
+  }
+  return Array.from(map.values());
+}
+
 // ─── Cluster card ──────────────────────────────────────────────────────────────
 
 interface ClusterCardProps {
   cluster: GapCluster;
-  // All enriched gap runs whose query_id is in this cluster
+  /** All gap runs whose query_id is in this cluster — grouped internally by query */
   runs: EnrichedRun[];
   clientId: string;
+  onOpenDrawer: (runs: EnrichedRun[], queryText: string) => void;
 }
 
-function ClusterCard({ cluster, runs, clientId }: ClusterCardProps) {
+function ClusterCard({ cluster, runs, clientId, onOpenDrawer }: ClusterCardProps) {
   const [expanded, setExpanded] = useState(false);
 
+  const grouped = groupRunsByQuery(runs);
+
   // Count queries displaced (competitor appeared) vs open (no source, no competitor)
-  const displacedCount = runs.filter(
-    (r) => (r.competitors_mentioned ?? []).length > 0
+  const displacedCount = grouped.filter(
+    (g) => g.competitorsMentioned.length > 0
   ).length;
-  const openCount = runs.filter(
-    (r) => (r.cited_sources ?? []).length === 0 && (r.competitors_mentioned ?? []).length === 0
+  const openCount = grouped.filter(
+    (g) => g.citedSources.length === 0 && g.competitorsMentioned.length === 0
   ).length;
 
   const competitorLine =
@@ -105,24 +157,25 @@ function ClusterCard({ cluster, runs, clientId }: ClusterCardProps) {
         </div>
       </button>
 
-      {/* Expanded query cards */}
-      {expanded && runs.length > 0 && (
+      {/* Expanded query cards — one per unique query, showing all gap models */}
+      {expanded && grouped.length > 0 && (
         <div className="border-t border-[#E2E8F0] px-5 py-4 space-y-3 bg-[rgba(244,246,249,0.35)]">
-          {runs.map((run) => (
+          {grouped.map((g) => (
             <NarrativePathway
-              key={run.id}
-              queryText={run.query_text}
-              model={run.model}
-              intent={run.query_intent}
-              citedSources={run.cited_sources ?? []}
-              competitorsMentioned={run.competitors_mentioned ?? []}
+              key={g.queryId}
+              queryText={g.queryText}
+              models={g.models}
+              intent={g.queryIntent}
+              citedSources={g.citedSources}
+              competitorsMentioned={g.competitorsMentioned}
               clientId={clientId}
+              onViewResponse={() => onOpenDrawer(g.allRuns, g.queryText)}
             />
           ))}
         </div>
       )}
 
-      {expanded && runs.length === 0 && (
+      {expanded && grouped.length === 0 && (
         <div className="border-t border-[#E2E8F0] px-5 py-4">
           <p className="text-[12px] text-[#9CA3AF] italic">No run data available for these queries.</p>
         </div>
@@ -148,6 +201,7 @@ function NarrativeInner() {
   // to avoid the Supabase 1000-row default limit skewing the headline fraction.
   const [totalQueryCount, setTotalQueryCount] = useState(0);
   const [loading, setLoading] = useState(true);
+  const [drawer, setDrawer] = useState<DrawerState | null>(null);
 
   useEffect(() => {
     loadData();
@@ -308,15 +362,12 @@ function NarrativeInner() {
 
   const trackedModels = (client.selected_models ?? []) as LLMModel[];
 
-  // ── Cluster section state ──────────────────────────────────────────────────
+  // ── Cluster section ────────────────────────────────────────────────────────
   // Use the targeted cluster fetch when available — it's guaranteed to contain
   // runs for all cluster query_ids regardless of the general enrichedRuns window.
-  const latestRunByQueryId = new Map<string, EnrichedRun>();
-  for (const run of clusterEnrichedRuns.length > 0 ? clusterEnrichedRuns : enrichedRuns) {
-    if (!latestRunByQueryId.has(run.query_id)) {
-      latestRunByQueryId.set(run.query_id, run);
-    }
-  }
+  // We want ALL runs per query (not just the latest) so ClusterCard can show
+  // all models that produced a gap for each query.
+  const clusterSourceRuns = clusterEnrichedRuns.length > 0 ? clusterEnrichedRuns : enrichedRuns;
 
   return (
     <div className="space-y-2">
@@ -348,12 +399,19 @@ function NarrativeInner() {
           <div className="space-y-3">
             {clusters.map((cluster) => {
               const memberIds = clusterQueryMap.get(cluster.id) ?? new Set();
-              // One card per unique query_id — use latest run to represent it
-              const clusterRuns = Array.from(memberIds)
-                .map((qid) => latestRunByQueryId.get(qid))
-                .filter((r): r is EnrichedRun => r !== undefined);
+              // Pass ALL runs for this cluster's queries — ClusterCard groups them by
+              // query_id internally so each card shows every model that produced a gap
+              const clusterRuns = clusterSourceRuns.filter(
+                (r) => memberIds.has(r.query_id) && !r.brand_mentioned
+              );
               return (
-                <ClusterCard key={cluster.id} cluster={cluster} runs={clusterRuns} clientId={client.id} />
+                <ClusterCard
+                  key={cluster.id}
+                  cluster={cluster}
+                  runs={clusterRuns}
+                  clientId={client.id}
+                  onOpenDrawer={(runs, queryText) => setDrawer({ runs, queryText })}
+                />
               );
             })}
           </div>
@@ -392,11 +450,12 @@ function NarrativeInner() {
                       <NarrativePathway
                         key={run.id}
                         queryText={run.query_text}
-                        model={run.model}
+                        models={[run.model]}
                         intent={run.query_intent}
                         citedSources={run.cited_sources ?? []}
                         competitorsMentioned={run.competitors_mentioned ?? []}
                         clientId={client.id}
+                        onViewResponse={() => setDrawer({ runs: [run], queryText: run.query_text })}
                       />
                     ))}
                     {modelGaps.length > 20 && (
@@ -450,6 +509,20 @@ function NarrativeInner() {
             </table>
           </div>
         </>
+      )}
+
+      {/* Response drawer */}
+      {drawer && (
+        <ResponseDrawer
+          queryText={drawer.queryText}
+          runs={drawer.runs.map((r): RunOption => ({
+            model: r.model,
+            rawResponse: r.raw_response,
+            competitorsMentioned: r.competitors_mentioned ?? [],
+          }))}
+          brandName={client.brand_name ?? client.url}
+          onClose={() => setDrawer(null)}
+        />
       )}
     </div>
   );

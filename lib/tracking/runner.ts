@@ -1,8 +1,9 @@
 // Service-role client bypasses RLS — required because Inngest runs outside
 // the HTTP request context and has no session cookies to authenticate with.
 import { createServiceClient } from "@/lib/supabase/server";
-import { callClaude } from "@/lib/llm/anthropic";
+import { callClaude, callHaiku } from "@/lib/llm/anthropic";
 import { callGPT4o } from "@/lib/llm/openai";
+import { normaliseBrandName, BRAND_NORMALISATION_MAP } from "@/lib/brand-normaliser";
 import { callPerplexity, callPerplexityFull } from "@/lib/llm/perplexity";
 import { callGemini } from "@/lib/llm/gemini";
 import { callDeepSeek } from "@/lib/llm/deepseek";
@@ -29,7 +30,7 @@ const PRIMARY_TIMEOUT_MS: Record<LLMModel, number> = {
   "claude-sonnet-4-6": 90_000,
   "gemini": 90_000,
   "deepseek": 90_000,
-  "perplexity": 150_000,
+  "perplexity": 60_000,
 };
 
 // Hard timeout on any single LLM call. Without this, one hung API connection
@@ -140,6 +141,81 @@ function parseEnrichmentJson(
   } catch (err) {
     console.error(
       `[runner] enrichment JSON.parse failed model=${model} label=${label} err=${err instanceof Error ? err.message : String(err)} raw=${JSON.stringify(raw.slice(0, 500))}`
+    );
+    return null;
+  }
+}
+
+// Brand mention extraction prompt — sent to Haiku after problem_aware/category runs.
+// Unlike the BVI enrichment (which is self-referential and must use the same model),
+// this is a classification task on text we already have, so Haiku is appropriate.
+// The query text is included so the model can apply the "no prompted brand" rule.
+function buildExtractionPrompt(queryText: string, rawResponse: string): string {
+  return `You are analysing an AI-generated response to identify every brand mentioned.
+
+Original query: "${queryText}"
+
+Response to analyse:
+"${rawResponse.slice(0, 3000)}"
+
+Extract every brand, product brand, or company name mentioned anywhere in this response.
+For each brand found:
+1. The brand name, exactly as written in the response
+2. A one-sentence description of the context in which it was mentioned
+3. The sentiment of the mention: positive, neutral, negative, or unclear
+
+Rules:
+- Include every brand mentioned, even briefly or in passing
+- Do not include generic category terms (e.g. "washing machine brand" is not a brand)
+- Do not include the brand you were asked about if it was named in the query — only include brands that appeared organically in the response
+- If no brands are mentioned, return an empty array
+
+Return JSON only, no explanation, no markdown:
+{
+  "brands_mentioned": [
+    {
+      "brand": "string",
+      "context": "string",
+      "sentiment": "positive" | "neutral" | "negative" | "unclear"
+    }
+  ]
+}`;
+}
+
+interface ExtractionBrand {
+  brand: string;
+  context: string;
+  sentiment: string;
+}
+
+// Same fence-stripping logic as parseEnrichmentJson — Haiku occasionally wraps output
+// in markdown code fences despite the prompt instruction.
+function parseExtractionJson(raw: string, queryId: string): ExtractionBrand[] | null {
+  let cleaned = raw
+    .replace(/^```[\w]*$/gm, "")
+    .replace(/^```$/gm, "")
+    .trim();
+
+  const firstBrace = cleaned.indexOf("{");
+  if (firstBrace === -1) {
+    console.error(`[runner] extraction parse: no JSON found query=${queryId} raw=${JSON.stringify(raw.slice(0, 300))}`);
+    return null;
+  }
+  if (firstBrace > 0) cleaned = cleaned.slice(firstBrace);
+
+  const lastBrace = cleaned.lastIndexOf("}");
+  if (lastBrace !== -1 && lastBrace < cleaned.length - 1) {
+    cleaned = cleaned.slice(0, lastBrace + 1);
+  }
+
+  try {
+    const p = JSON.parse(cleaned) as Record<string, unknown>;
+    return Array.isArray(p.brands_mentioned)
+      ? (p.brands_mentioned as ExtractionBrand[])
+      : [];
+  } catch (err) {
+    console.error(
+      `[runner] extraction JSON.parse failed query=${queryId} err=${err instanceof Error ? err.message : String(err)} raw=${JSON.stringify(raw.slice(0, 300))}`
     );
     return null;
   }
@@ -383,6 +459,60 @@ export async function runTrackingForClient(
                   );
                 }
               }
+            }
+          }
+
+          // ── Competitive mention extraction (Haiku) ────────────────────────
+          // Runs on problem_aware and category queries only — the two intents where
+          // brands appear organically. Validation/comparative are excluded by design
+          // (validation is Beko-framed, comparative prompts name brands explicitly).
+          if ((query.intent === "problem_aware" || query.intent === "category") && insertedRun) {
+            try {
+              const extractionPrompt = buildExtractionPrompt(query.text, rawResponse);
+              const extractionRaw = await withTimeout(
+                callHaiku(extractionPrompt),
+                10_000,
+                `haiku-extraction query=${query.id}`
+              );
+
+              const brands = parseExtractionJson(extractionRaw, query.id);
+              if (brands && brands.length > 0) {
+                const rows = brands.map((b) => ({
+                  tracking_run_id: insertedRun.id,
+                  query_id: query.id,
+                  client_id: clientId,
+                  model,
+                  query_intent: query.intent,
+                  brand_name_raw: b.brand,
+                  brand_name: normaliseBrandName(b.brand),
+                  is_tracked_brand:
+                    normaliseBrandName(b.brand).toLowerCase() === brandName.toLowerCase(),
+                  mention_context: b.context,
+                  mention_sentiment: b.sentiment,
+                }));
+
+                const { error: mentionInsertError } = await supabase
+                  .from("response_brand_mentions")
+                  .insert(rows);
+                if (mentionInsertError) {
+                  console.error(
+                    `[runner] response_brand_mentions insert failed model=${model} query=${query.id}: ${mentionInsertError.message}`
+                  );
+                }
+
+                // Log unmatched brand names so the normalisation map can be extended
+                const unmatched = brands
+                  .map((b) => b.brand)
+                  .filter((raw) => !BRAND_NORMALISATION_MAP[raw.toLowerCase().trim()]);
+                if (unmatched.length > 0) {
+                  console.log("[brand-normaliser] Unmatched brands (add to map):", unmatched);
+                }
+              }
+            } catch (err) {
+              // Non-critical — log and continue; do not fail the run
+              console.error(
+                `[runner] Brand extraction failed model=${model} query=${query.id}: ${err instanceof Error ? err.message : String(err)}`
+              );
             }
           }
         }

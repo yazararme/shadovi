@@ -7,12 +7,33 @@ import {
   ModelIntentHeatmap,
   type HeatmapRow,
 } from "@/components/dashboard/ModelIntentHeatmap";
+import { ResponseDrawer } from "@/components/dashboard/ResponseDrawer";
 import { Skeleton } from "@/components/ui/skeleton";
+import { ChevronRight } from "lucide-react";
 import type { Client, TrackingRun, Competitor, LLMModel, QueryIntent } from "@/types";
 
 type EnrichedRun = TrackingRun & {
   query_text: string;
   query_intent: QueryIntent;
+};
+
+interface DrawerState {
+  run: EnrichedRun;
+  queryText: string;
+}
+
+const INTENT_LABEL: Record<string, string> = {
+  category: "Category",
+  comparative: "Comparative",
+  validation: "Validation",
+  problem_aware: "Problem Discovery",
+};
+
+const INTENT_BADGE: Record<string, string> = {
+  category: "bg-[rgba(13,4,55,0.06)]    text-[#0D0437]  border-[rgba(13,4,55,0.15)]",
+  comparative: "bg-[rgba(123,94,167,0.08)] text-[#7B5EA7]  border-[rgba(123,94,167,0.2)]",
+  validation: "bg-[rgba(26,143,92,0.08)]  text-[#1A8F5C]  border-[rgba(26,143,92,0.2)]",
+  problem_aware: "bg-[rgba(31,182,255,0.08)] text-[#1580c0]  border-[rgba(31,182,255,0.2)]",
 };
 
 // Unaided visibility covers only unprompted discovery intents.
@@ -59,6 +80,7 @@ function CompetitiveInner() {
   const [competitors, setCompetitors] = useState<Competitor[]>([]);
   const [intentFilter, setIntentFilter] = useState<QueryIntent | "all">("all");
   const [loading, setLoading] = useState(true);
+  const [drawer, setDrawer] = useState<DrawerState | null>(null);
 
   useEffect(() => {
     loadData();
@@ -165,15 +187,19 @@ function CompetitiveInner() {
   }
 
   // Competitor gaps
-  type CompetitorGap = { name: string; winCount: number; queryTexts: string[]; models: string[] };
+  type CompetitorGap = { name: string; winCount: number; queryTexts: string[]; models: string[]; sampleRuns: EnrichedRun[] };
   const compGaps: Record<string, CompetitorGap> = {};
   filteredRuns.forEach((r) => {
     if (r.brand_mentioned) return;
     (r.competitors_mentioned ?? []).forEach((comp) => {
-      if (!compGaps[comp]) compGaps[comp] = { name: comp, winCount: 0, queryTexts: [], models: [] };
+      if (!compGaps[comp]) compGaps[comp] = { name: comp, winCount: 0, queryTexts: [], models: [], sampleRuns: [] };
       compGaps[comp].winCount++;
       if (!compGaps[comp].queryTexts.includes(r.query_text)) compGaps[comp].queryTexts.push(r.query_text);
       if (!compGaps[comp].models.includes(r.model)) compGaps[comp].models.push(r.model);
+      // Keep one sample run per unique query text for the drawer
+      if (compGaps[comp].sampleRuns.length < 3 && !compGaps[comp].sampleRuns.some((s) => s.query_text === r.query_text)) {
+        compGaps[comp].sampleRuns.push(r);
+      }
     });
   });
   const compGapList = Object.values(compGaps).sort((a, b) => b.winCount - a.winCount);
@@ -198,8 +224,8 @@ function CompetitiveInner() {
               type="button"
               onClick={() => setIntentFilter(value)}
               className={`rounded-full border px-4 py-1.5 text-[11px] font-bold transition-colors ${intentFilter === value
-                  ? "bg-[#0D0437] text-white border-[#0D0437]"
-                  : "border-[#E2E8F0] text-[#6B7280] hover:border-[#0D0437] hover:text-[#0D0437]"
+                ? "bg-[#0D0437] text-white border-[#0D0437]"
+                : "border-[#E2E8F0] text-[#6B7280] hover:border-[#0D0437] hover:text-[#0D0437]"
                 }`}
             >
               {label}
@@ -236,38 +262,81 @@ function CompetitiveInner() {
                 </tr>
               </thead>
               <tbody>
-                {compGapList.map((comp) => (
-                  <tr key={comp.name} className="border-b last:border-0 hover:bg-[rgba(244,246,249,0.7)]">
-                    <td className="px-4 py-3 font-bold text-[14px] text-[#0D0437]">{comp.name}</td>
-                    <td className="px-4 py-3">
-                      {/* Circular gap-count badge */}
-                      <div className="w-8 h-8 rounded-full bg-[rgba(255,75,110,0.1)] text-[#FF4B6E] font-bold text-[12px] flex items-center justify-center">
-                        {comp.winCount}
-                      </div>
-                    </td>
-                    <td className="px-4 py-3">
-                      <div className="flex gap-1 flex-wrap">
-                        {comp.models.map((m) => (
-                          <span
-                            key={m}
-                            className="text-[8px] font-bold px-1.5 py-0.5 rounded bg-[#F4F6F9] text-[#0D0437] border border-[#E2E8F0]"
-                          >
-                            {MODEL_LABELS[m as LLMModel] ?? m}
-                          </span>
-                        ))}
-                      </div>
-                    </td>
-                    <td className="px-4 py-3 hidden md:table-cell">
-                      <p className="text-[11px] text-[#6B7280] italic whitespace-normal break-words">
-                        &ldquo;{comp.queryTexts[0]}&rdquo;
-                      </p>
-                    </td>
-                  </tr>
-                ))}
+                {compGapList.map((comp) => {
+                  const sampleRun = comp.sampleRuns[0] ?? null;
+                  return (
+                    <tr
+                      key={comp.name}
+                      className="border-b last:border-0 hover:bg-[rgba(244,246,249,0.7)] cursor-pointer"
+                      onClick={() => sampleRun && setDrawer({ run: sampleRun, queryText: sampleRun.query_text })}
+                    >
+                      <td className="px-4 py-3 font-bold text-[14px] text-[#0D0437]">{comp.name}</td>
+                      <td className="px-4 py-3">
+                        {/* Circular gap-count badge */}
+                        <div className="w-8 h-8 rounded-full bg-[rgba(255,75,110,0.1)] text-[#FF4B6E] font-bold text-[12px] flex items-center justify-center">
+                          {comp.winCount}
+                        </div>
+                      </td>
+                      <td className="px-4 py-3">
+                        <div className="flex gap-1 flex-wrap">
+                          {comp.models.map((m) => (
+                            <span
+                              key={m}
+                              className="text-[8px] font-bold px-1.5 py-0.5 rounded bg-[#F4F6F9] text-[#0D0437] border border-[#E2E8F0]"
+                            >
+                              {MODEL_LABELS[m as LLMModel] ?? m}
+                            </span>
+                          ))}
+                        </div>
+                      </td>
+                      <td className="px-4 py-3">
+                        <div className="flex flex-col gap-1.5">
+                          <p className="text-[11px] text-[#6B7280] italic whitespace-normal break-words">
+                            &ldquo;{comp.queryTexts[0]}&rdquo;
+                          </p>
+                          {sampleRun && (
+                            <div className="flex items-center justify-between gap-2 flex-wrap">
+                              {/* Intent badge — mirrors Overview Latest Activity pattern */}
+                              <span
+                                className={`text-[9px] font-bold uppercase tracking-wide px-1.5 py-0.5 rounded border w-fit ${INTENT_BADGE[sampleRun.query_intent] ?? "bg-[#F4F6F9] text-[#6B7280] border-[#E2E8F0]"
+                                  }`}
+                              >
+                                {INTENT_LABEL[sampleRun.query_intent] ?? sampleRun.query_intent}
+                              </span>
+                              {/* View response link — bottom-right */}
+                              <button
+                                type="button"
+                                onClick={(e) => { e.stopPropagation(); setDrawer({ run: sampleRun, queryText: sampleRun.query_text }); }}
+                                className="flex items-center gap-0.5 text-[9px] font-bold uppercase tracking-wide text-[#9CA3AF] hover:text-[#0D0437] transition-colors whitespace-nowrap ml-auto"
+                              >
+                                View response
+                                <ChevronRight className="h-3 w-3" />
+                              </button>
+                            </div>
+                          )}
+                        </div>
+                      </td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           </div>
         </>
+      )}
+
+      {/* Response drawer */}
+      {drawer && (
+        <ResponseDrawer
+          queryText={drawer.queryText}
+          runs={[{
+            model: drawer.run.model,
+            rawResponse: drawer.run.raw_response,
+            competitorsMentioned: drawer.run.competitors_mentioned ?? [],
+          }]}
+          brandName={brandName}
+          onClose={() => setDrawer(null)}
+        />
       )}
     </div>
   );
