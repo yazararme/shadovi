@@ -1,0 +1,110 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    /* ── shadcn/ui semantic tokens (aligned to Shadovi palette) ── */
+    --background: 0 0% 100%;
+    --foreground: 237 26% 14%;        /* #1A1A2E */
+    --card: 0 0% 100%;
+    --card-foreground: 237 26% 14%;
+    --popover: 0 0% 100%;
+    --popover-foreground: 237 26% 14%;
+    --primary: 249 89% 11%;           /* #0D0437 ink */
+    --primary-foreground: 0 0% 98%;
+    --secondary: 216 33% 97%;         /* #F4F6F9 slate */
+    --secondary-foreground: 237 26% 14%;
+    --muted: 216 33% 97%;
+    --muted-foreground: 220 9% 46%;   /* #6B7280 */
+    --accent: 216 33% 97%;
+    --accent-foreground: 237 26% 14%;
+    --destructive: 349 100% 64%;      /* #FF4B6E coral */
+    --destructive-foreground: 0 0% 98%;
+    --border: 214 32% 91%;            /* #E2E8F0 */
+    --input: 214 32% 91%;
+    --ring: 249 89% 11%;
+    --radius: 0.5rem;
+
+    /* ── Shadovi brand tokens ── */
+    --ink: #0D0437;
+    --ink-mid: #1a1150;
+    --coral: #FF4B6E;
+    --cyan: #00B4D8;
+    --violet: #7B5EA7;
+    --green: #1A8F5C;
+    --green-bright: #2DD4A0;
+    --shadovi-slate: #F4F6F9;
+    --shadovi-text: #1A1A2E;
+    --shadovi-muted: #6B7280;
+    --shadovi-border: #E2E8F0;
+    --amber: #F59E0B;
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+  body {
+    @apply bg-background text-foreground;
+    font-family: var(--font-sans), sans-serif;
+    font-feature-settings: "rlig" 1, "calt" 1;
+    -webkit-font-smoothing: antialiased;
+  }
+}
+
+/* ── Dark section grid pattern (McKinsey grid) ── */
+.dark-grid {
+  position: relative;
+  overflow: hidden;
+}
+.dark-grid::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background-image:
+    linear-gradient(rgba(255,255,255,0.025) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255,255,255,0.025) 1px, transparent 1px);
+  background-size: 64px 64px;
+  pointer-events: none;
+  z-index: 0;
+}
+.dark-grid::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background-image: repeating-linear-gradient(
+    -45deg, transparent, transparent 80px,
+    rgba(255,255,255,0.012) 80px, rgba(255,255,255,0.012) 81px
+  );
+  pointer-events: none;
+  z-index: 0;
+}
+.dark-grid > * {
+  position: relative;
+  z-index: 1;
+}
+
+/* ── Pulsing live dot ── */
+@keyframes shadovi-pulse {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.5; transform: scale(0.85); }
+}
+.live-dot {
+  animation: shadovi-pulse 2s infinite;
+}
+
+/* ── Gradient bar (model bars, InsightMetric) ── */
+.grad-bar {
+  background: linear-gradient(135deg, #FF4B6E, #7B5EA7, #00B4D8);
+}
+
+/* ── Fade-in on mount (used for Audit Scope section) ── */
+@keyframes fadeInUp {
+  from { opacity: 0; transform: translateY(6px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+.fade-in-up {
+  animation: fadeInUp 0.4s ease forwards;
+}

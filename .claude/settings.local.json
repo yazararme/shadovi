@@ -1,0 +1,17 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(npx create-next-app:*)",
+      "mcp__claude_ai_Linear__update_issue",
+      "mcp__claude_ai_Linear__get_issue",
+      "Bash(npm_config_cache=/tmp/npm-cache npm install:*)",
+      "Bash(lsof:*)",
+      "Bash(curl:*)",
+      "Bash(python3:*)",
+      "Bash(node -e:*)",
+      "Bash(npm_config_cache=/tmp/npm-cache npx next build:*)",
+      "Bash(npm_config_cache=/tmp/npm-cache npx tsx:*)",
+      "Bash(npx next build:*)"
+    ]
+  }
+}
