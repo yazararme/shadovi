@@ -490,7 +490,7 @@ function OverviewInner() {
           barPercent={mentionRate}
           insight={mentionInsight}
           sentiment={mentionRate >= 60 ? "positive" : mentionRate >= 30 ? "neutral" : "negative"}
-          navLink={{ href: "/narrative", label: "See how you compare" }}
+          navLink={{ href: `/narrative?client=${client.id}`, label: "See how you compare" }}
         />
         <InsightMetric
           label="Fact Accuracy"
@@ -498,7 +498,7 @@ function OverviewInner() {
           barPercent={factAccuracyPct}
           insight={factAccuracyInsight}
           sentiment={factAccuracyPct === null ? "neutral" : factAccuracyPct >= 80 ? "positive" : factAccuracyPct >= 50 ? "neutral" : "negative"}
-          navLink={{ href: "/knowledge", label: "View brand knowledge" }}
+          navLink={{ href: `/knowledge?client=${client.id}`, label: "View brand knowledge" }}
         />
         <InsightMetric
           label="Visibility Gaps"
@@ -512,7 +512,7 @@ function OverviewInner() {
           barPercent={citationPct}
           insight={citationInsight}
           sentiment={citationPct >= 40 ? "positive" : citationPct >= 20 ? "neutral" : "negative"}
-          navLink={{ href: "/sources", label: "View source intelligence" }}
+          navLink={{ href: `/sources?client=${client.id}`, label: "View source intelligence" }}
         />
       </div>
 

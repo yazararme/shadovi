@@ -131,8 +131,8 @@ export function NarrativePathway({
           <span className="text-xs text-muted-foreground w-24 shrink-0">source</span>
           {citedSources.length > 0 ? (
             <div className="flex items-center gap-1.5">
-              {citedSources.map((s) => (
-                <div key={s.url} title={s.domain} className="shrink-0">
+              {citedSources.map((s, idx) => (
+                <div key={`${s.url ?? "unknown"}-${idx}`} title={s.domain} className="shrink-0">
                   <FaviconImg domain={s.domain} />
                 </div>
               ))}
