@@ -515,6 +515,64 @@ export async function runTrackingForClient(
               );
             }
           }
+
+          // ── Brand mention fallback scan ────────────────────────────────────
+          // The scorer uses an exact substring match against the stored brand_name,
+          // which can silently miss the brand if brand_name has surrounding whitespace
+          // or if the brand appears in a list/passing reference the structured
+          // extraction step skipped. If scorer said false, re-check with a trimmed
+          // case-insensitive scan and correct both tracking_runs and response_brand_mentions.
+          if (!scored.brand_mentioned && insertedRun) {
+            const foundByFallback = rawResponse
+              .toLowerCase()
+              .includes(brandName.toLowerCase().trim());
+
+            if (foundByFallback) {
+              // Correct the tracking_run record
+              const { error: updateErr } = await supabase
+                .from("tracking_runs")
+                .update({ brand_mentioned: true })
+                .eq("id", insertedRun.id);
+              if (updateErr) {
+                console.error(
+                  `[runner] fallback brand_mentioned update failed model=${model} query=${query.id}: ${updateErr.message}`
+                );
+              } else {
+                // Keep the in-memory scored value in sync so the summary counter is correct
+                scored.brand_mentioned = true;
+
+                // Insert a response_brand_mentions row only if extraction didn't already
+                // create one for this run (avoids duplicate is_tracked_brand rows)
+                const { count: existingCount } = await supabase
+                  .from("response_brand_mentions")
+                  .select("id", { count: "exact", head: true })
+                  .eq("tracking_run_id", insertedRun.id)
+                  .eq("is_tracked_brand", true);
+
+                if ((existingCount ?? 0) === 0) {
+                  const { error: rbmErr } = await supabase
+                    .from("response_brand_mentions")
+                    .insert({
+                      tracking_run_id: insertedRun.id,
+                      query_id: query.id,
+                      client_id: clientId,
+                      model,
+                      query_intent: query.intent,
+                      brand_name_raw: brandName,
+                      brand_name: normaliseBrandName(brandName),
+                      is_tracked_brand: true,
+                      mention_context: "Detected by fallback string scan",
+                      mention_sentiment: "unclear",
+                    });
+                  if (rbmErr) {
+                    console.error(
+                      `[runner] fallback response_brand_mentions insert failed model=${model} query=${query.id}: ${rbmErr.message}`
+                    );
+                  }
+                }
+              }
+            }
+          }
         }
 
         if (scored.brand_mentioned && scored.mention_sentiment !== "negative") {

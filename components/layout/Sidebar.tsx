@@ -124,10 +124,10 @@ function SidebarInner({ onSignOut }: { onSignOut: () => void }) {
               key={href}
               href={`${href}${clientParam}`}
               className={cn(
-                "flex items-center gap-3 rounded-md px-3 py-2 text-sm font-medium transition-colors",
+                "flex items-center gap-3 rounded-md px-3 py-2 text-sm transition-colors",
                 active
-                  ? "bg-white/10 text-white"
-                  : "text-white/60 hover:bg-white/8 hover:text-white"
+                  ? "bg-white/10 text-white font-bold"
+                  : "font-medium text-white/60 hover:bg-white/8 hover:text-white"
               )}
             >
               <Icon className="h-4 w-4" />

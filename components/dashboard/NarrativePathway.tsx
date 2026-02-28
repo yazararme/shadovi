@@ -74,10 +74,13 @@ export function NarrativePathway({
 }: NarrativePathwayProps) {
 
   return (
-    <div className="border rounded-xl p-4 space-y-3 bg-card">
+    <div
+      className={`border border-[#E2E8F0] rounded-lg p-3 space-y-2 bg-white transition-colors${onViewResponse ? " cursor-pointer hover:bg-[rgba(244,246,249,0.7)] hover:border-[#C7CEE0]" : ""}`}
+      onClick={onViewResponse}
+    >
       {/* Query */}
       <div className="flex items-start justify-between gap-3">
-        <p className="text-sm font-medium text-foreground leading-snug">
+        <p className="text-[13px] font-normal text-[#374151] leading-snug">
           &ldquo;{queryText}&rdquo;
         </p>
         <span className="text-xs text-muted-foreground shrink-0 mt-0.5">
@@ -145,15 +148,11 @@ export function NarrativePathway({
 
         {/* View response link — bottom-right, only when callback provided */}
         {onViewResponse && (
-          <div className="flex justify-end pt-1">
-            <button
-              type="button"
-              onClick={onViewResponse}
-              className="flex items-center gap-0.5 text-[9px] font-bold uppercase tracking-wide text-[#9CA3AF] hover:text-[#0D0437] transition-colors whitespace-nowrap"
-            >
+          <div className="flex justify-end">
+            <span className="flex items-center gap-0.5 text-[9px] font-bold uppercase tracking-wide text-[#9CA3AF] whitespace-nowrap">
               View response
               <ChevronRight className="h-3 w-3" />
-            </button>
+            </span>
           </div>
         )}
       </div>

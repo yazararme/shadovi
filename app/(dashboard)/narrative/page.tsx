@@ -5,7 +5,6 @@ import { useSearchParams } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
 import { NarrativePathway } from "@/components/dashboard/NarrativePathway";
 import { ResponseDrawer, type RunOption } from "@/components/dashboard/ResponseDrawer";
-import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { ChevronDown, ChevronUp } from "lucide-react";
 import type { Client, TrackingRun, LLMModel, QueryIntent, GapCluster } from "@/types";
@@ -23,6 +22,33 @@ const MODEL_LABELS: Record<LLMModel, string> = {
   "deepseek": "DeepSeek",
 };
 
+const MODEL_COLORS: Record<LLMModel, string> = {
+  "gpt-4o": "bg-[#10a37f]/10 text-[#10a37f] border-[#10a37f]/30",
+  "claude-sonnet-4-6": "bg-[#d4a27e]/10 text-[#d4a27e] border-[#d4a27e]/30",
+  "perplexity": "bg-[#1fb6ff]/10 text-[#1fb6ff] border-[#1fb6ff]/30",
+  "gemini": "bg-[#4285f4]/10 text-[#4285f4] border-[#4285f4]/30",
+  "deepseek": "bg-[#6366f1]/10 text-[#6366f1] border-[#6366f1]/30",
+};
+
+const INTENT_BADGE: Record<QueryIntent, { label: string; cls: string }> = {
+  problem_aware: {
+    label: "Problem",
+    cls: "bg-[rgba(139,92,246,0.08)] text-[#7C3AED] border-[rgba(139,92,246,0.2)]",
+  },
+  category: {
+    label: "Category",
+    cls: "bg-[rgba(59,130,246,0.08)] text-[#3B82F6] border-[rgba(59,130,246,0.2)]",
+  },
+  comparative: {
+    label: "Comparative",
+    cls: "bg-[rgba(245,158,11,0.08)] text-[#D97706] border-[rgba(245,158,11,0.2)]",
+  },
+  validation: {
+    label: "Validation",
+    cls: "bg-[rgba(16,185,129,0.08)] text-[#059669] border-[rgba(16,185,129,0.2)]",
+  },
+};
+
 const SOURCE_TYPE_LABELS: Record<string, string> = {
   reddit: "Reddit",
   g2: "G2",
@@ -31,17 +57,6 @@ const SOURCE_TYPE_LABELS: Record<string, string> = {
   official_docs: "Docs",
   other: "Other",
 };
-
-function SubLabel({ children }: { children: React.ReactNode }) {
-  return (
-    <div className="flex items-center gap-3 my-6">
-      <span className="text-[9px] font-bold tracking-[2.5px] uppercase text-[#6B7280] whitespace-nowrap">
-        {children}
-      </span>
-      <div className="flex-1 h-px bg-[#E2E8F0]" />
-    </div>
-  );
-}
 
 interface DrawerState {
   runs: EnrichedRun[];
@@ -60,10 +75,18 @@ interface GroupedQueryRun {
   allRuns: EnrichedRun[];
 }
 
-function groupRunsByQuery(runs: EnrichedRun[]): GroupedQueryRun[] {
+function groupRunsByQuery(
+  runs: EnrichedRun[],
+  brandMentionedQM: Set<string> = new Set()
+): GroupedQueryRun[] {
   const map = new Map<string, GroupedQueryRun>();
+
   // runs are ordered ran_at DESC — first encounter = latest run per query
   for (const run of runs) {
+    // Exclude models where extraction confirmed the tracked brand was present,
+    // even if brand_mentioned was incorrectly set to false by the scorer.
+    if (brandMentionedQM.has(`${run.query_id}:${run.model}`)) continue;
+
     if (!map.has(run.query_id)) {
       map.set(run.query_id, {
         queryId: run.query_id,
@@ -91,100 +114,108 @@ function groupRunsByQuery(runs: EnrichedRun[]): GroupedQueryRun[] {
   return Array.from(map.values());
 }
 
-// ─── Cluster card ──────────────────────────────────────────────────────────────
+// ── Section heading ──────────────────────────────────────────────────────────────
 
-interface ClusterCardProps {
-  cluster: GapCluster;
-  /** All gap runs whose query_id is in this cluster — grouped internally by query */
-  runs: EnrichedRun[];
-  clientId: string;
-  onOpenDrawer: (runs: EnrichedRun[], queryText: string) => void;
-}
-
-function ClusterCard({ cluster, runs, clientId, onOpenDrawer }: ClusterCardProps) {
-  const [expanded, setExpanded] = useState(false);
-
-  const grouped = groupRunsByQuery(runs);
-
-  // Count queries displaced (competitor appeared) vs open (no source, no competitor)
-  const displacedCount = grouped.filter(
-    (g) => g.competitorsMentioned.length > 0
-  ).length;
-  const openCount = grouped.filter(
-    (g) => g.citedSources.length === 0 && g.competitorsMentioned.length === 0
-  ).length;
-
-  const competitorLine =
-    displacedCount > 0
-      ? ` — ${cluster.competitors_present.slice(0, 4).join(", ")} present`
-      : "";
-
+function SectionHeading({
+  children,
+  count,
+}: {
+  children: React.ReactNode;
+  count?: number;
+}) {
   return (
-    <div className="border border-[#E2E8F0] rounded-xl bg-white overflow-hidden">
-      {/* Card header — always visible */}
-      <button
-        onClick={() => setExpanded((v) => !v)}
-        className="w-full text-left px-5 py-4 flex items-start justify-between gap-4 hover:bg-[rgba(244,246,249,0.6)] transition-colors"
-      >
-        <div className="space-y-1 min-w-0">
-          <div className="flex items-center gap-2.5 flex-wrap">
-            <span className="text-[14px] font-bold text-[#0D0437] leading-snug">
-              {cluster.cluster_name}
-            </span>
-            {displacedCount > 0 && (
-              <span className="inline-flex items-center rounded border px-2 py-0.5 text-[10px] font-bold tracking-wide uppercase bg-[rgba(255,75,110,0.10)] text-[#FF4B6E] border-[rgba(255,75,110,0.25)]">
-                Displaced {displacedCount}
-              </span>
-            )}
-            {openCount > 0 && (
-              <span className="inline-flex items-center rounded border px-2 py-0.5 text-[10px] font-bold tracking-wide uppercase bg-[rgba(0,175,150,0.10)] text-[#00AF96] border-[rgba(0,175,150,0.25)]">
-                Open {openCount}
-              </span>
-            )}
-          </div>
-          <p className="text-[11px] text-[#6B7280]">{cluster.persona_label}</p>
-          <p className="text-[11px] font-mono text-[#9CA3AF]">
-            {cluster.query_count} {cluster.query_count === 1 ? "query" : "queries"}
-            {competitorLine}
-          </p>
-        </div>
-        <div className="shrink-0 mt-1 text-[#9CA3AF]">
-          {expanded ? (
-            <ChevronUp className="h-4 w-4" />
-          ) : (
-            <ChevronDown className="h-4 w-4" />
-          )}
-        </div>
-      </button>
-
-      {/* Expanded query cards — one per unique query, showing all gap models */}
-      {expanded && grouped.length > 0 && (
-        <div className="border-t border-[#E2E8F0] px-5 py-4 space-y-3 bg-[rgba(244,246,249,0.35)]">
-          {grouped.map((g) => (
-            <NarrativePathway
-              key={g.queryId}
-              queryText={g.queryText}
-              models={g.models}
-              intent={g.queryIntent}
-              citedSources={g.citedSources}
-              competitorsMentioned={g.competitorsMentioned}
-              clientId={clientId}
-              onViewResponse={() => onOpenDrawer(g.allRuns, g.queryText)}
-            />
-          ))}
-        </div>
-      )}
-
-      {expanded && grouped.length === 0 && (
-        <div className="border-t border-[#E2E8F0] px-5 py-4">
-          <p className="text-[12px] text-[#9CA3AF] italic">No run data available for these queries.</p>
-        </div>
+    <div className="flex items-center gap-3 mb-4">
+      <span className="text-[9px] font-bold tracking-[2.5px] uppercase text-[#6B7280] whitespace-nowrap">
+        {children}
+      </span>
+      <div className="flex-1 h-px bg-[#E2E8F0]" />
+      {count !== undefined && (
+        <span className="font-mono text-[11px] text-[#9CA3AF] whitespace-nowrap shrink-0">
+          {count}
+        </span>
       )}
     </div>
   );
 }
 
-// ─── Main page ─────────────────────────────────────────────────────────────────
+// ── Compact cluster grid card ────────────────────────────────────────────────────
+
+function ClusterGridCard({
+  cluster,
+  displaced,
+  open,
+  isActive,
+  onClick,
+}: {
+  cluster: GapCluster;
+  displaced: number;
+  open: number;
+  isActive: boolean;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      onClick={onClick}
+      className={`w-full text-left p-4 rounded-xl border bg-white transition-all ${
+        isActive
+          ? "border-[#0D0437] shadow-md ring-1 ring-[#0D0437]/10"
+          : "border-[#E2E8F0] hover:border-[#C7CEE0] hover:shadow-sm"
+      }`}
+    >
+      <div className="space-y-2.5">
+        <div className="flex items-start justify-between gap-2">
+          <p className="text-[13px] font-bold text-[#0D0437] leading-snug">
+            {cluster.cluster_name}
+          </p>
+          {isActive ? (
+            <ChevronUp className="h-3.5 w-3.5 text-[#9CA3AF] shrink-0 mt-0.5" />
+          ) : (
+            <ChevronDown className="h-3.5 w-3.5 text-[#9CA3AF] shrink-0 mt-0.5" />
+          )}
+        </div>
+
+        <p className="text-[12px] text-[#6B7280]">
+          {cluster.query_count} {cluster.query_count === 1 ? "query" : "queries"}
+        </p>
+
+        {(displaced > 0 || open > 0) && (
+          <div className="flex gap-1.5 flex-wrap">
+            {displaced > 0 && (
+              <span className="inline-flex items-center rounded border px-1.5 py-0.5 text-[10px] font-bold tracking-wide uppercase bg-[rgba(255,75,110,0.10)] text-[#FF4B6E] border-[rgba(255,75,110,0.25)]">
+                Displaced {displaced}
+              </span>
+            )}
+            {open > 0 && (
+              <span className="inline-flex items-center rounded border px-1.5 py-0.5 text-[10px] font-bold tracking-wide uppercase bg-[rgba(0,175,150,0.10)] text-[#00AF96] border-[rgba(0,175,150,0.25)]">
+                Open {open}
+              </span>
+            )}
+          </div>
+        )}
+
+        {(cluster.competitors_present ?? []).length > 0 && (
+          <div className="flex gap-1 flex-wrap">
+            {cluster.competitors_present.slice(0, 3).map((c) => (
+              <span
+                key={c}
+                className="px-1.5 py-0.5 rounded text-[10px] font-medium bg-[#F4F6F9] text-[#6B7280] border border-[#E2E8F0]"
+              >
+                {c}
+              </span>
+            ))}
+            {cluster.competitors_present.length > 3 && (
+              <span className="text-[10px] text-[#9CA3AF] self-center">
+                +{cluster.competitors_present.length - 3} more
+              </span>
+            )}
+          </div>
+        )}
+      </div>
+    </button>
+  );
+}
+
+// ─── Main page ──────────────────────────────────────────────────────────────────
 
 function NarrativeInner() {
   const searchParams = useSearchParams();
@@ -200,8 +231,13 @@ function NarrativeInner() {
   // Total non-validation queries for the denominator — from queries table, not tracking_runs,
   // to avoid the Supabase 1000-row default limit skewing the headline fraction.
   const [totalQueryCount, setTotalQueryCount] = useState(0);
+  // "query_id:model" pairs confirmed by response_brand_mentions as is_tracked_brand=true.
+  // Catches runs where brand_mentioned was incorrectly set to false by the scorer.
+  const [brandMentionedQM, setBrandMentionedQM] = useState<Set<string>>(new Set());
   const [loading, setLoading] = useState(true);
   const [drawer, setDrawer] = useState<DrawerState | null>(null);
+  // Which cluster card is currently expanded (null = all collapsed)
+  const [activeClusterId, setActiveClusterId] = useState<string | null>(null);
 
   useEffect(() => {
     loadData();
@@ -220,7 +256,7 @@ function NarrativeInner() {
     setClient(activeClient);
 
     if (activeClient) {
-      const [{ data: runs }, { data: queries }, { data: rawClusters }] =
+      const [{ data: runs }, { data: queries }, { data: rawClusters }, { data: rbmRows }] =
         await Promise.all([
           supabase
             .from("tracking_runs")
@@ -240,7 +276,20 @@ function NarrativeInner() {
             .eq("client_id", activeClient.id)
             .order("run_date", { ascending: false })
             .limit(20), // cap at 20 clusters per page load
+          // "query_id:model" pairs where Claude extraction confirmed the tracked brand was present.
+          // Used to suppress model tags for runs where brand_mentioned was incorrectly set to false.
+          supabase
+            .from("response_brand_mentions")
+            .select("query_id, model")
+            .eq("client_id", activeClient.id)
+            .eq("is_tracked_brand", true)
+            .limit(10000),
         ]);
+
+      const qmSet = new Set(
+        (rbmRows ?? []).filter((r) => r.query_id && r.model).map((r) => `${r.query_id}:${r.model}`)
+      );
+      setBrandMentionedQM(qmSet);
 
       const queryMap = Object.fromEntries((queries ?? []).map((q) => [q.id, q]));
       const enriched = (runs ?? []).map((r) => ({
@@ -302,7 +351,18 @@ function NarrativeInner() {
   if (loading) {
     return (
       <div className="space-y-6">
-        <h1 className="font-serif text-[32px] font-semibold text-[#0D0437] tracking-tight">Competitive Gaps</h1>
+        <h1 className="font-serif text-[32px] font-semibold text-[#0D0437] tracking-tight">
+          Competitive Gaps
+        </h1>
+        <div className="grid grid-cols-4 gap-3">
+          {[0, 1, 2, 3].map((i) => (
+            <div key={i} className="border border-[#E2E8F0] rounded-xl p-5 bg-white space-y-2">
+              <Skeleton className="h-8 w-16" />
+              <Skeleton className="h-3 w-24" />
+              <Skeleton className="h-3 w-32" />
+            </div>
+          ))}
+        </div>
         {[0, 1, 2].map((i) => (
           <div key={i} className="border border-[#E2E8F0] rounded-xl p-5 space-y-3 bg-white">
             <Skeleton className="h-4 w-3/4" />
@@ -317,7 +377,9 @@ function NarrativeInner() {
   if (!client || enrichedRuns.length < 10) {
     return (
       <div className="space-y-4">
-        <h1 className="font-serif text-[32px] font-semibold text-[#0D0437] tracking-tight">Competitive Gaps</h1>
+        <h1 className="font-serif text-[32px] font-semibold text-[#0D0437] tracking-tight">
+          Competitive Gaps
+        </h1>
         <p className="text-sm text-[#6B7280]">
           {enrichedRuns.length === 0
             ? "Run your first audit from the Overview tab to see perception gaps."
@@ -327,27 +389,68 @@ function NarrativeInner() {
     );
   }
 
-  // Validation intent belongs to Brand Knowledge — exclude from perception gap analysis
-  const gapRuns = enrichedRuns.filter((r) => !r.brand_mentioned && r.query_intent !== "validation");
+  // ── Derived data ──────────────────────────────────────────────────────────────
 
-  // Query IDs that are clustered (problem_aware + category only)
-  const clusteredQueryIds = new Set(
-    Array.from(clusterQueryMap.values()).flatMap((s) => Array.from(s))
+  // Validation intent belongs to Brand Knowledge — exclude from perception gap analysis.
+  // brand_mentioned === false is the primary gate; brandMentionedQM catches runs where the
+  // scorer incorrectly set brand_mentioned=false but extraction confirmed the brand was present.
+  const gapRuns = enrichedRuns.filter(
+    (r) =>
+      r.brand_mentioned === false &&
+      r.query_intent !== "validation" &&
+      !brandMentionedQM.has(`${r.query_id}:${r.model}`)
   );
 
-  // Comparative gaps always stay in the ungrouped section.
-  // Non-comparative (problem_aware/category) gaps only appear here if they weren't
-  // assigned to a cluster — e.g. on first load before any clustering has run.
-  const ungroupedGapRuns = gapRuns.filter(
-    (r) => r.query_intent === "comparative" || !clusteredQueryIds.has(r.query_id)
+  // All gap queries grouped by queryId, sorted by model count desc (most models missing = most urgent)
+  const allGapGrouped = groupRunsByQuery(gapRuns, brandMentionedQM).sort(
+    (a, b) => b.models.length - a.models.length
   );
 
-  const byModel: Partial<Record<LLMModel, EnrichedRun[]>> = {};
-  ungroupedGapRuns.forEach((r) => {
-    if (!byModel[r.model]) byModel[r.model] = [];
-    byModel[r.model]!.push(r);
-  });
+  // Hero stats
+  const totalGapQueries = allGapGrouped.length;
+  const displacedTotal = allGapGrouped.filter((g) => g.competitorsMentioned.length > 0).length;
+  const openTotal = allGapGrouped.filter(
+    (g) => g.competitorsMentioned.length === 0 && g.citedSources.length === 0
+  ).length;
+  const pctAffected =
+    totalQueryCount > 0 ? Math.round((totalGapQueries / totalQueryCount) * 100) : 0;
 
+  // Use the targeted cluster fetch when available — it's guaranteed to contain
+  // runs for all cluster query_ids regardless of the general enrichedRuns window.
+  const clusterSourceRuns = clusterEnrichedRuns.length > 0 ? clusterEnrichedRuns : enrichedRuns;
+
+  // Per-cluster displaced/open counts for the grid cards — computed from run data, not the
+  // cluster's competitors_present field, so the badges reflect actual gap analysis.
+  const clusterStats = new Map<string, { displaced: number; open: number }>();
+  for (const cluster of clusters) {
+    const memberIds = clusterQueryMap.get(cluster.id) ?? new Set();
+    const cRuns = clusterSourceRuns.filter(
+      (r) => memberIds.has(r.query_id) && r.brand_mentioned === false
+    );
+    const grouped = groupRunsByQuery(cRuns, brandMentionedQM);
+    clusterStats.set(cluster.id, {
+      displaced: grouped.filter((g) => g.competitorsMentioned.length > 0).length,
+      open: grouped.filter(
+        (g) => g.citedSources.length === 0 && g.competitorsMentioned.length === 0
+      ).length,
+    });
+  }
+
+  // Active cluster — data for the full-width expansion panel
+  const activeCluster = activeClusterId
+    ? clusters.find((c) => c.id === activeClusterId) ?? null
+    : null;
+  const activeClusterGrouped = activeCluster
+    ? (() => {
+        const memberIds = clusterQueryMap.get(activeCluster.id) ?? new Set();
+        const cRuns = clusterSourceRuns.filter(
+          (r) => memberIds.has(r.query_id) && r.brand_mentioned === false
+        );
+        return groupRunsByQuery(cRuns, brandMentionedQM);
+      })()
+    : [];
+
+  // Source breakdown
   const domainStats: Record<string, { type: string; count: number }> = {};
   gapRuns.forEach((r) => {
     (r.cited_sources ?? []).forEach((s) => {
@@ -360,130 +463,229 @@ function NarrativeInner() {
     .slice(0, 10);
   const totalCitedGaps = sourcesTable.reduce((s, [, v]) => s + v.count, 0);
 
-  const trackedModels = (client.selected_models ?? []) as LLMModel[];
-
-  // ── Cluster section ────────────────────────────────────────────────────────
-  // Use the targeted cluster fetch when available — it's guaranteed to contain
-  // runs for all cluster query_ids regardless of the general enrichedRuns window.
-  // We want ALL runs per query (not just the latest) so ClusterCard can show
-  // all models that produced a gap for each query.
-  const clusterSourceRuns = clusterEnrichedRuns.length > 0 ? clusterEnrichedRuns : enrichedRuns;
+  const brandLabel = client.brand_name ?? client.url;
 
   return (
-    <div className="space-y-2">
-      <div className="mb-2">
+    <div className="space-y-8">
+      {/* ── Page header ──────────────────────────────────────────────────────── */}
+      <div>
         <h1 className="font-serif text-[32px] font-semibold text-[#0D0437] tracking-tight leading-tight">
           Competitive Gaps
         </h1>
         <p className="font-mono text-[11px] text-[#6B7280] mt-1">
-          {clusters.length > 0
-            ? clusters.reduce((sum, c) => sum + c.query_count, 0)
-            : new Set(gapRuns.map((r) => r.query_id)).size
-          } of {totalQueryCount} non-validation queries absent from LLM responses across all personas and intents
+          Where competitors appear in LLM responses instead of {brandLabel}
         </p>
       </div>
 
-      {/* ── Gap Clusters ────────────────────────────────────────────────────── */}
-      {clusters.length === 0 ? (
-        <>
-          <SubLabel>Gap Clusters</SubLabel>
+      {/* ── Hero stat bar ─────────────────────────────────────────────────────── */}
+      <div className="grid grid-cols-4 gap-3">
+        {[
+          {
+            value: totalGapQueries,
+            label: "Gap Queries",
+            sub: "queries without brand",
+            color: "#0D0437",
+          },
+          {
+            value: displacedTotal,
+            label: "Displaced",
+            sub: "competitor appeared instead",
+            color: "#FF4B6E",
+          },
+          {
+            value: openTotal,
+            label: "Open",
+            sub: "no brand or competitor",
+            color: "#F59E0B",
+          },
+          {
+            value: `${pctAffected}%`,
+            label: "Query Set",
+            sub: "of non-validation queries",
+            color: "#0D0437",
+          },
+        ].map(({ value, label, sub, color }) => (
+          <div key={label} className="bg-white border border-[#E2E8F0] rounded-xl px-5 py-4">
+            <p
+              className="text-[30px] font-black leading-none tracking-tight"
+              style={{ color }}
+            >
+              {value}
+            </p>
+            <p className="text-[10px] font-bold uppercase tracking-[1.5px] text-[#6B7280] mt-2">
+              {label}
+            </p>
+            <p className="text-[11px] text-[#9CA3AF] mt-0.5">{sub}</p>
+          </div>
+        ))}
+      </div>
+
+      {/* ── Gap Clusters ──────────────────────────────────────────────────────── */}
+      <section>
+        <SectionHeading count={clusters.length > 0 ? clusters.length : undefined}>
+          Gap Clusters
+        </SectionHeading>
+
+        {clusters.length === 0 ? (
           <div className="border border-[#E2E8F0] rounded-xl p-8 text-center bg-white">
             <p className="text-[13px] text-[#6B7280]">
               Run an audit to see how your gap queries cluster into buyer patterns.
             </p>
           </div>
-        </>
-      ) : (
-        <>
-          <SubLabel>Gap Clusters</SubLabel>
+        ) : (
           <div className="space-y-3">
-            {clusters.map((cluster) => {
-              const memberIds = clusterQueryMap.get(cluster.id) ?? new Set();
-              // Pass ALL runs for this cluster's queries — ClusterCard groups them by
-              // query_id internally so each card shows every model that produced a gap
-              const clusterRuns = clusterSourceRuns.filter(
-                (r) => memberIds.has(r.query_id) && !r.brand_mentioned
-              );
-              return (
-                <ClusterCard
-                  key={cluster.id}
-                  cluster={cluster}
-                  runs={clusterRuns}
-                  clientId={client.id}
-                  onOpenDrawer={(runs, queryText) => setDrawer({ runs, queryText })}
-                />
-              );
-            })}
-          </div>
-        </>
-      )}
+            {/* 3-column card grid */}
+            <div className="grid grid-cols-3 gap-3">
+              {clusters.map((cluster) => {
+                const stats = clusterStats.get(cluster.id) ?? { displaced: 0, open: 0 };
+                return (
+                  <ClusterGridCard
+                    key={cluster.id}
+                    cluster={cluster}
+                    displaced={stats.displaced}
+                    open={stats.open}
+                    isActive={activeClusterId === cluster.id}
+                    onClick={() =>
+                      setActiveClusterId((prev) =>
+                        prev === cluster.id ? null : cluster.id
+                      )
+                    }
+                  />
+                );
+              })}
+            </div>
 
-      {/* ── Ungrouped gap queries (comparative + any slipped through) ───────── */}
-      {ungroupedGapRuns.length === 0 ? (
-        gapRuns.length > 0 && clusters.length > 0 ? null : (
-          <div className="border border-[#E2E8F0] rounded-lg p-8 text-center bg-white">
-            <p className="text-sm font-bold text-[#1A8F5C]">
-              Zero narrative gaps — your brand appears in every tracked query.
-            </p>
-          </div>
-        )
-      ) : (
-        <>
-          <SubLabel>Comparative Gap Queries</SubLabel>
-          <div className="space-y-6">
-            {trackedModels.map((model) => {
-              const modelGaps = byModel[model] ?? [];
-              if (modelGaps.length === 0) return null;
-              return (
-                <div key={model} className="space-y-3">
-                  <div className="flex items-center gap-2">
-                    <h2 className="text-[13px] font-bold text-[#0D0437]">{MODEL_LABELS[model]}</h2>
-                    <Badge
-                      variant="secondary"
-                      className="text-[10px] bg-[rgba(255,75,110,0.08)] text-[#FF4B6E] border-0"
-                    >
-                      {modelGaps.length} gap{modelGaps.length !== 1 ? "s" : ""}
-                    </Badge>
-                  </div>
-                  <div className="space-y-2">
-                    {modelGaps.slice(0, 20).map((run) => (
+            {/* Full-width expansion panel — shows the selected cluster's gap queries */}
+            {activeCluster && (
+              <div className="border border-[#0D0437]/15 rounded-xl bg-white overflow-hidden shadow-sm">
+                <div className="px-5 py-3 border-b border-[#E2E8F0] bg-[#F4F6F9] flex items-center justify-between">
+                  <p className="text-[12px] font-bold text-[#0D0437]">
+                    {activeCluster.cluster_name}
+                  </p>
+                  <span className="font-mono text-[11px] text-[#9CA3AF]">
+                    {activeClusterGrouped.length}{" "}
+                    {activeClusterGrouped.length === 1 ? "gap query" : "gap queries"}
+                  </span>
+                </div>
+                {activeClusterGrouped.length > 0 ? (
+                  <div className="p-4 space-y-2.5">
+                    {activeClusterGrouped.map((g) => (
                       <NarrativePathway
-                        key={run.id}
-                        queryText={run.query_text}
-                        models={[run.model]}
-                        intent={run.query_intent}
-                        citedSources={run.cited_sources ?? []}
-                        competitorsMentioned={run.competitors_mentioned ?? []}
+                        key={g.queryId}
+                        queryText={g.queryText}
+                        models={g.models}
+                        intent={g.queryIntent}
+                        citedSources={g.citedSources}
+                        competitorsMentioned={g.competitorsMentioned}
                         clientId={client.id}
-                        onViewResponse={() => setDrawer({ runs: [run], queryText: run.query_text })}
+                        onViewResponse={() =>
+                          setDrawer({ runs: g.allRuns, queryText: g.queryText })
+                        }
                       />
                     ))}
-                    {modelGaps.length > 20 && (
-                      <p className="text-[11px] text-[#6B7280] text-center py-2">
-                        +{modelGaps.length - 20} more gaps not shown
-                      </p>
-                    )}
                   </div>
-                </div>
-              );
-            })}
+                ) : (
+                  <p className="px-5 py-4 text-[12px] text-[#9CA3AF] italic">
+                    No run data available for these queries.
+                  </p>
+                )}
+              </div>
+            )}
           </div>
-        </>
+        )}
+      </section>
+
+      {/* ── All Gap Queries table ─────────────────────────────────────────────── */}
+      {allGapGrouped.length > 0 && (
+        <section>
+          <SectionHeading count={allGapGrouped.length}>All Gap Queries</SectionHeading>
+          <div className="border border-[#E2E8F0] rounded-xl overflow-hidden bg-white">
+            <table className="w-full">
+              <thead>
+                <tr className="border-b border-[#E2E8F0] bg-[#F4F6F9]">
+                  <th className="px-4 py-3 text-left text-[8px] font-bold tracking-[2px] uppercase text-[#6B7280] w-[38%]">
+                    Query
+                  </th>
+                  <th className="px-4 py-3 text-left text-[8px] font-bold tracking-[2px] uppercase text-[#6B7280] w-[10%]">
+                    Intent
+                  </th>
+                  <th className="px-4 py-3 text-left text-[8px] font-bold tracking-[2px] uppercase text-[#6B7280] w-[27%]">
+                    Models Missing {brandLabel}
+                  </th>
+                  <th className="px-4 py-3 text-left text-[8px] font-bold tracking-[2px] uppercase text-[#6B7280] w-[25%]">
+                    Competitors Present
+                  </th>
+                </tr>
+              </thead>
+              <tbody>
+                {allGapGrouped.map((g) => (
+                  <tr
+                    key={g.queryId}
+                    onClick={() => setDrawer({ runs: g.allRuns, queryText: g.queryText })}
+                    className="border-b border-[#E2E8F0] last:border-0 hover:bg-[rgba(244,246,249,0.7)] cursor-pointer transition-colors"
+                  >
+                    <td className="px-4 py-3">
+                      <p className="text-[12px] text-[#374151] leading-snug line-clamp-2">
+                        &ldquo;{g.queryText}&rdquo;
+                      </p>
+                    </td>
+                    <td className="px-4 py-3">
+                      <span
+                        className={`inline-flex items-center rounded border px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wide ${INTENT_BADGE[g.queryIntent].cls}`}
+                      >
+                        {INTENT_BADGE[g.queryIntent].label}
+                      </span>
+                    </td>
+                    <td className="px-4 py-3">
+                      <div className="flex gap-1 flex-wrap">
+                        {g.models.map((m) => (
+                          <span
+                            key={m}
+                            className={`inline-flex items-center rounded border px-1.5 py-0.5 text-[10px] font-medium ${MODEL_COLORS[m]}`}
+                          >
+                            {MODEL_LABELS[m]}
+                          </span>
+                        ))}
+                      </div>
+                    </td>
+                    <td className="px-4 py-3">
+                      {g.competitorsMentioned.length > 0 ? (
+                        <div className="flex gap-1 flex-wrap">
+                          {g.competitorsMentioned.map((c) => (
+                            <span
+                              key={c}
+                              className="inline-flex items-center rounded border px-1.5 py-0.5 text-[10px] font-medium bg-[rgba(255,75,110,0.08)] text-[#FF4B6E] border-[rgba(255,75,110,0.2)]"
+                            >
+                              {c}
+                            </span>
+                          ))}
+                        </div>
+                      ) : (
+                        <span className="text-[11px] text-[#9CA3AF] italic">none</span>
+                      )}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </section>
       )}
 
-      {/* ── Source breakdown ─────────────────────────────────────────────────── */}
+      {/* ── Source Breakdown ─────────────────────────────────────────────────── */}
       {sourcesTable.length > 0 && (
-        <>
-          <SubLabel>Source Breakdown</SubLabel>
-          <div className="border border-[#E2E8F0] rounded-lg overflow-hidden bg-white">
+        <section>
+          <SectionHeading>Source Breakdown</SectionHeading>
+          <div className="border border-[#E2E8F0] rounded-xl overflow-hidden bg-white">
             <table className="w-full text-sm">
               <thead>
                 <tr className="border-b bg-[#F4F6F9]">
                   {["Domain", "Type", "Appearances", "% of Gaps"].map((h) => (
                     <th
                       key={h}
-                      className={`px-4 py-3 text-[8px] font-bold tracking-[2px] uppercase text-[#6B7280] ${h === "Appearances" || h === "% of Gaps" ? "text-right" : "text-left"
-                        }`}
+                      className={`px-4 py-3 text-[8px] font-bold tracking-[2px] uppercase text-[#6B7280] ${
+                        h === "Appearances" || h === "% of Gaps" ? "text-right" : "text-left"
+                      }`}
                     >
                       {h}
                     </th>
@@ -492,23 +694,32 @@ function NarrativeInner() {
               </thead>
               <tbody>
                 {sourcesTable.map(([domain, { type, count }]) => (
-                  <tr key={domain} className="border-b last:border-0 hover:bg-[rgba(244,246,249,0.7)]">
-                    <td className="px-4 py-3 font-semibold text-[#0D0437] text-[12px]">{domain}</td>
+                  <tr
+                    key={domain}
+                    className="border-b last:border-0 hover:bg-[rgba(244,246,249,0.7)]"
+                  >
+                    <td className="px-4 py-3 font-semibold text-[#0D0437] text-[12px]">
+                      {domain}
+                    </td>
                     <td className="px-4 py-3">
                       <span className="text-[9px] font-bold uppercase tracking-wide px-2 py-0.5 rounded bg-[#F4F6F9] text-[#6B7280]">
                         {SOURCE_TYPE_LABELS[type] ?? type}
                       </span>
                     </td>
-                    <td className="px-4 py-3 text-right font-mono text-[12px] text-[#0D0437]">{count}</td>
+                    <td className="px-4 py-3 text-right font-mono text-[12px] text-[#0D0437]">
+                      {count}
+                    </td>
                     <td className="px-4 py-3 text-right font-mono text-[12px] text-[#6B7280]">
-                      {totalCitedGaps > 0 ? `${Math.round((count / totalCitedGaps) * 100)}%` : "—"}
+                      {totalCitedGaps > 0
+                        ? `${Math.round((count / totalCitedGaps) * 100)}%`
+                        : "—"}
                     </td>
                   </tr>
                 ))}
               </tbody>
             </table>
           </div>
-        </>
+        </section>
       )}
 
       {/* Response drawer */}
@@ -520,7 +731,7 @@ function NarrativeInner() {
             rawResponse: r.raw_response,
             competitorsMentioned: r.competitors_mentioned ?? [],
           }))}
-          brandName={client.brand_name ?? client.url}
+          brandName={brandLabel}
           onClose={() => setDrawer(null)}
         />
       )}
