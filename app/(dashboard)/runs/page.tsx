@@ -79,25 +79,6 @@ function getRunStatus(run: TrackingRun): RunStatus {
   return "completed";
 }
 
-const STATUS_BADGE: Record<RunStatus, string> = {
-  completed: "bg-[rgba(26,143,92,0.08)]  text-[#1A8F5C] border-[rgba(26,143,92,0.2)]",
-  failed: "bg-[rgba(255,75,110,0.08)] text-[#FF4B6E] border-[rgba(255,75,110,0.2)]",
-  partial: "bg-[rgba(245,158,11,0.08)] text-[#F59E0B] border-[rgba(245,158,11,0.2)]",
-};
-
-const STATUS_ACTIVE_BADGE: Record<RunStatus | "all", string> = {
-  all: "bg-[#0D0437] text-white border-[#0D0437]",
-  completed: "bg-[#1A8F5C] text-white border-[#1A8F5C]",
-  failed: "bg-[#FF4B6E] text-white border-[#FF4B6E]",
-  partial: "bg-[#F59E0B] text-white border-[#F59E0B]",
-};
-
-const STATUS_INACTIVE_BADGE: Record<RunStatus | "all", string> = {
-  all: "bg-white text-[#6B7280] border-[#E2E8F0] hover:border-[#0D0437] hover:text-[#0D0437]",
-  completed: "bg-white text-[#1A8F5C] border-[rgba(26,143,92,0.3)] hover:border-[#1A8F5C]",
-  failed: "bg-white text-[#FF4B6E] border-[rgba(255,75,110,0.3)] hover:border-[#FF4B6E]",
-  partial: "bg-white text-[#F59E0B] border-[rgba(245,158,11,0.3)] hover:border-[#F59E0B]",
-};
 
 // ── CSV export column definitions ──────────────────────────────────────────────
 const SELECTABLE_COLUMNS: { key: string; label: string; defaultOn: boolean }[] = [
@@ -106,6 +87,7 @@ const SELECTABLE_COLUMNS: { key: string; label: string; defaultOn: boolean }[] =
   { key: "completeness", label: "Completeness Score", defaultOn: true },
   { key: "hallucination", label: "Hallucination Flag", defaultOn: true },
   { key: "brand_positioning", label: "Brand Positioning", defaultOn: true },
+  { key: "mention_sentiment", label: "Sentiment", defaultOn: true },
   { key: "run_status", label: "Run Status", defaultOn: true },
   { key: "raw_response", label: "Response Text", defaultOn: false },
   { key: "is_bait", label: "Bait Query Flag", defaultOn: false },
@@ -146,7 +128,6 @@ interface DrawerState {
   queryText: string;
 }
 
-type StatusFilterValue = "all" | "completed" | "failed" | "partial";
 
 function RunsInner() {
   const searchParams = useSearchParams();
@@ -157,9 +138,6 @@ function RunsInner() {
   const [intentFilter, setIntentFilter] = useState(searchParams.get("intent") ?? "all");
   const [selectedModel, setSelectedModel] = useState<LLMModel | "all">(
     (searchParams.get("model") as LLMModel) ?? "all"
-  );
-  const [statusFilter, setStatusFilter] = useState<StatusFilterValue>(
-    (searchParams.get("status") as StatusFilterValue) ?? "all"
   );
 
   const [client, setClient] = useState<Client | null>(null);
@@ -188,7 +166,7 @@ function RunsInner() {
   useEffect(() => {
     setPage(0);
     loadedOnceRef.current = false;
-    loadData(0, intentFilter, selectedModel, statusFilter, true);
+    loadData(0, intentFilter, selectedModel, true);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [clientIdParam]);
 
@@ -197,7 +175,6 @@ function RunsInner() {
     targetPage: number,
     intent: string,
     model: LLMModel | "all",
-    status: StatusFilterValue,
     freshClient: boolean = false
   ) {
     if (loadedOnceRef.current) setPageLoading(true);
@@ -263,23 +240,6 @@ function RunsInner() {
       if (intent !== "all") runsQuery = runsQuery.eq("query_intent", intent);
       if (model !== "all") runsQuery = runsQuery.eq("model", model);
 
-      // Status filter — mirrors getRunStatus() logic:
-      // failed  → no response at all
-      // partial → has a response, is a validation run, brand_mentioned still null (scorer didn't finish)
-      // completed → has a response AND (not validation, OR brand_mentioned is populated)
-      if (status === "failed") {
-        runsQuery = runsQuery.is("raw_response", null);
-      } else if (status === "partial") {
-        runsQuery = runsQuery
-          .not("raw_response", "is", null)
-          .eq("query_intent", "validation")
-          .is("brand_mentioned", null);
-      } else if (status === "completed") {
-        // completed = response exists AND (non-validation intent OR brand_mentioned is set)
-        runsQuery = runsQuery
-          .not("raw_response", "is", null)
-          .or("query_intent.neq.validation,brand_mentioned.not.is.null");
-      }
 
       const { data: runData, count } = await runsQuery;
       setRuns(runData ?? []);
@@ -294,15 +254,13 @@ function RunsInner() {
   // ── Filter helpers ─────────────────────────────────────────────────────────
 
   // Persist active filters in URL so filtered views are shareable/deep-linkable
-  function pushFilters(overrides: { intent?: string; model?: LLMModel | "all"; status?: StatusFilterValue }) {
+  function pushFilters(overrides: { intent?: string; model?: LLMModel | "all" }) {
     const sp = new URLSearchParams();
     if (clientIdParam) sp.set("client", clientIdParam);
     const intent = overrides.intent ?? intentFilter;
     if (intent !== "all") sp.set("intent", intent);
     const model = overrides.model ?? selectedModel;
     if (model !== "all") sp.set("model", model);
-    const status = overrides.status ?? statusFilter;
-    if (status !== "all") sp.set("status", status);
     // replace (not push) so filter clicks don't pollute browser history
     router.replace(`/runs?${sp.toString()}`, { scroll: false });
   }
@@ -311,26 +269,19 @@ function RunsInner() {
     setIntentFilter(intent);
     setPage(0);
     pushFilters({ intent });
-    loadData(0, intent, selectedModel, statusFilter);
+    loadData(0, intent, selectedModel);
   }
 
   function handleModelChange(model: LLMModel | "all") {
     setSelectedModel(model);
     setPage(0);
     pushFilters({ model });
-    loadData(0, intentFilter, model, statusFilter);
-  }
-
-  function handleStatusChange(val: StatusFilterValue) {
-    setStatusFilter(val);
-    setPage(0);
-    pushFilters({ status: val });
-    loadData(0, intentFilter, selectedModel, val);
+    loadData(0, intentFilter, model);
   }
 
   function goToPage(newPage: number) {
     setPage(newPage);
-    loadData(newPage, intentFilter, selectedModel, statusFilter);
+    loadData(newPage, intentFilter, selectedModel);
   }
 
   async function handleRunNow() {
@@ -372,18 +323,6 @@ function RunsInner() {
 
       if (intentFilter !== "all") runsQuery = runsQuery.eq("query_intent", intentFilter);
       if (selectedModel !== "all") runsQuery = runsQuery.eq("model", selectedModel);
-      if (statusFilter === "failed") {
-        runsQuery = runsQuery.is("raw_response", null);
-      } else if (statusFilter === "partial") {
-        runsQuery = runsQuery
-          .not("raw_response", "is", null)
-          .eq("query_intent", "validation")
-          .is("brand_mentioned", null);
-      } else if (statusFilter === "completed") {
-        runsQuery = runsQuery
-          .not("raw_response", "is", null)
-          .or("query_intent.neq.validation,brand_mentioned.not.is.null");
-      }
 
       const { data: allRuns } = await runsQuery;
       if (!allRuns) throw new Error("No data returned");
@@ -409,7 +348,7 @@ function RunsInner() {
       }
 
       // Build CSV
-      const ALWAYS_HEADERS = ["Query Text", "Intent", "Model", "Run Date"];
+      const ALWAYS_HEADERS = ["Query Text", "Intent", "Model", "Run Date", "Run Time"];
       const selectedCols = SELECTABLE_COLUMNS.filter((c) => exportColumns.has(c.key));
       const headers = [...ALWAYS_HEADERS, ...selectedCols.map((c) => c.label)];
 
@@ -417,12 +356,16 @@ function RunsInner() {
         const queryText = queryMap.get(run.query_id) ?? "";
         const score = scoreMap.get(run.id);
         const status = getRunStatus(run);
+        const ranAt = new Date(run.ran_at);
+        const runDate = ranAt.toLocaleDateString("en-GB", { timeZone: "Europe/London", day: "2-digit", month: "2-digit", year: "numeric" });
+        const runTime = ranAt.toLocaleTimeString("en-GB", { timeZone: "Europe/London", hour: "2-digit", minute: "2-digit" });
 
         const fixed = [
           csvEscape(queryText),
           run.query_intent ?? "",
           MODEL_LABELS[run.model] ?? run.model,
-          run.ran_at,
+          runDate,
+          runTime,
         ];
 
         const optional = selectedCols.map(({ key }) => {
@@ -433,6 +376,7 @@ function RunsInner() {
             case "completeness": return score?.completeness ?? "";
             case "hallucination": return score ? String(score.hallucination) : "";
             case "brand_positioning": return run.brand_positioning ?? "";
+            case "mention_sentiment": return run.mention_sentiment ?? "";
             case "run_status": return status;
             case "raw_response": return csvEscape(run.raw_response ?? "");
             case "is_bait": return String(queryIsBaitMap.get(run.query_id) ?? false);
@@ -615,26 +559,6 @@ function RunsInner() {
           })}
         </div>
 
-        {/* Status filter pills */}
-        <div className="flex items-center gap-1.5 flex-wrap">
-          <span className="text-[9px] font-bold uppercase tracking-[1.5px] text-[#9CA3AF] mr-0.5">
-            Status
-          </span>
-          {(["all", "completed", "failed", "partial"] as const).map((val) => {
-            const labels = { all: "All", completed: "Completed", failed: "Failed", partial: "Partial" };
-            const active = statusFilter === val;
-            return (
-              <button
-                key={val}
-                onClick={() => handleStatusChange(val)}
-                className={`text-[9px] font-bold uppercase tracking-wide px-2 py-1 rounded border transition-colors ${active ? STATUS_ACTIVE_BADGE[val] : STATUS_INACTIVE_BADGE[val]
-                  }`}
-              >
-                {labels[val]}
-              </button>
-            );
-          })}
-        </div>
       </div>
 
       {/* ── Empty state ───────────────────────────────────────────────────────── */}
@@ -672,7 +596,7 @@ function RunsInner() {
                   <th className="text-left px-4 py-3 text-[8px] font-bold tracking-[2px] uppercase text-[#6B7280]">Intent</th>
                   <th className="text-left px-4 py-3 text-[8px] font-bold tracking-[2px] uppercase text-[#6B7280]">Query</th>
                   <th className="text-left px-4 py-3 text-[8px] font-bold tracking-[2px] uppercase text-[#6B7280] hidden sm:table-cell">Model</th>
-                  <th className="text-left px-4 py-3 text-[8px] font-bold tracking-[2px] uppercase text-[#6B7280]">Status</th>
+                  <th className="text-left px-4 py-3 text-[8px] font-bold tracking-[2px] uppercase text-[#6B7280]">Sentiment</th>
                   <th className="text-right px-4 py-3 text-[8px] font-bold tracking-[2px] uppercase text-[#6B7280]">Date</th>
                 </tr>
               </thead>
@@ -681,7 +605,6 @@ function RunsInner() {
                   const queryText = queryMap.get(run.query_id) ?? "";
                   const intent = run.query_intent ?? "";
                   const isBait = queryIsBaitMap.get(run.query_id) ?? false;
-                  const runStatus = getRunStatus(run);
                   return (
                     <tr
                       key={run.id}
@@ -729,11 +652,21 @@ function RunsInner() {
                         </span>
                       </td>
 
-                      {/* Status */}
+                      {/* Sentiment */}
                       <td className="px-4 py-3">
-                        <span className={`text-[9px] font-bold uppercase tracking-wide px-1.5 py-0.5 rounded border ${STATUS_BADGE[runStatus]}`}>
-                          {runStatus}
-                        </span>
+                        {run.mention_sentiment && run.mention_sentiment !== "not_mentioned" ? (
+                          <span className={`text-[9px] font-bold uppercase tracking-wide px-1.5 py-0.5 rounded border ${
+                            run.mention_sentiment === "positive"
+                              ? "bg-[rgba(26,143,92,0.08)] text-[#1A8F5C] border-[rgba(26,143,92,0.2)]"
+                              : run.mention_sentiment === "negative"
+                              ? "bg-[rgba(255,75,110,0.08)] text-[#FF4B6E] border-[rgba(255,75,110,0.2)]"
+                              : "bg-[#F4F6F9] text-[#6B7280] border-[#E2E8F0]"
+                          }`}>
+                            {run.mention_sentiment}
+                          </span>
+                        ) : (
+                          <span className="text-[#9CA3AF] text-[11px]">—</span>
+                        )}
                       </td>
 
                       {/* Date */}
@@ -831,7 +764,7 @@ function RunsInner() {
               </p>
               <div className="flex gap-1.5 flex-wrap">
                 {[
-                  "Query Text", "Intent", "Model", "Run Date",
+                  "Query Text", "Intent", "Model", "Run Date", "Run Time",
                   ...SELECTABLE_COLUMNS.filter((c) => c.defaultOn).map((c) => c.label),
                 ].map((col) => (
                   <span

@@ -1,6 +1,6 @@
 "use client";
 
-import { Suspense, useState, useRef } from "react";
+import { Suspense, useState, useEffect, useRef } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -8,6 +8,103 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Plus, X, Upload, FileText } from "lucide-react";
 
 const MAX_FILE_SIZE = 5 * 1024 * 1024; // 5MB
+
+// ── Loading screen ──────────────────────────────────────────────────────────
+
+const LOADING_MESSAGES = [
+  "Scraping your website...",
+  "Analysing how AI models describe your brand...",
+  "Identifying your competitors...",
+  "Building your buyer personas...",
+  "Generating brand facts...",
+  "Building your query portfolio...",
+  "Almost ready...",
+] as const;
+
+function LoadingScreen({ clientId, onError }: { clientId: string; onError: () => void }) {
+  const router = useRouter();
+  // Stable ref so the polling effect doesn't need onError in its dep array
+  const onErrorRef = useRef(onError);
+  useEffect(() => { onErrorRef.current = onError; });
+
+  const [msgIndex, setMsgIndex] = useState(0);
+  const [visible, setVisible] = useState(true);
+  const [progress, setProgress] = useState(0);
+
+  // Advance through messages every 2.5s with a 300ms cross-fade
+  useEffect(() => {
+    const interval = setInterval(() => {
+      setVisible(false);
+      setTimeout(() => {
+        setMsgIndex((prev) => {
+          const next = Math.min(prev + 1, LOADING_MESSAGES.length - 1);
+          // Progress tracks to 95% across message steps; jumps to 100% on poll success
+          setProgress(Math.round((next / (LOADING_MESSAGES.length - 1)) * 95));
+          return next;
+        });
+        setVisible(true);
+      }, 300);
+    }, 2500);
+    return () => clearInterval(interval);
+  }, []);
+
+  // Poll every 3s; give up after 90s
+  useEffect(() => {
+    let stopped = false;
+    const startTime = Date.now();
+
+    async function poll() {
+      if (stopped) return;
+      if (Date.now() - startTime > 90_000) {
+        onErrorRef.current();
+        return;
+      }
+      try {
+        const res = await fetch(`/api/queries/status?clientId=${clientId}`);
+        const { ready } = await res.json();
+        if (ready && !stopped) {
+          setProgress(100);
+          setTimeout(() => router.push(`/portfolio?client=${clientId}`), 500);
+          return;
+        }
+      } catch {}
+      if (!stopped) setTimeout(poll, 3000);
+    }
+
+    const initial = setTimeout(poll, 3000);
+    return () => {
+      stopped = true;
+      clearTimeout(initial);
+    };
+  }, [clientId, router]);
+
+  return (
+    <div className="fixed inset-0 bg-[#F4F6F9] z-50 flex flex-col items-center justify-center">
+      {/* Logo */}
+      <span className="font-exo2 font-black text-[32px] text-[#0D0437] mb-12">Shadovi</span>
+
+      {/* Animated status message */}
+      <div className="h-7 flex items-center justify-center mb-6">
+        <p className={`text-base font-medium text-[#0D0437] transition-opacity duration-500 ${visible ? "opacity-100" : "opacity-0"}`}>
+          {LOADING_MESSAGES[msgIndex]}
+        </p>
+      </div>
+
+      {/* Progress bar */}
+      <div className="w-64 h-1 bg-[#E2E8F0] rounded-full mb-16">
+        <div
+          className="bg-gradient-to-r from-[#FF4B6E] to-[#00B4D8] h-full rounded-full transition-all duration-700"
+          style={{ width: `${progress}%` }}
+        />
+      </div>
+
+      {/* Category benchmark */}
+      <p className="text-sm text-[#6B7280] text-center max-w-sm">
+        In your category, brands appear in fewer than 1 in 5 AI purchase queries on average. In urgent purchase scenarios, most brands appear in zero.
+      </p>
+    </div>
+  );
+}
 const MAX_SUPPLEMENTARY = 2;
 const ACCEPTED_FILE_TYPES = ".txt,.md,.pdf";
 
@@ -19,6 +116,7 @@ function DiscoverPageInner() {
   const [url, setUrl] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [loadingClientId, setLoadingClientId] = useState<string | null>(null);
 
   // Additional context state
   const [supplementaryUrls, setSupplementaryUrls] = useState<string[]>([""]);
@@ -120,6 +218,13 @@ function DiscoverPageInner() {
         body: JSON.stringify({ clientId: bgClientId }),
       }).catch(() => {});
 
+      // Query generation fires in parallel with personas and facts
+      fetch("/api/queries/generate", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ clientId: bgClientId }),
+      }).catch(() => {});
+
       const likelyCompetitors = (data.brandDNA?.likely_competitors ?? []) as string[];
       if (likelyCompetitors.length > 0) {
         fetch("/api/competitors/check", {
@@ -132,12 +237,25 @@ function DiscoverPageInner() {
         }).catch(() => {});
       }
 
-      router.push(`/refine?client=${bgClientId}`);
+      // Show loading screen while pipeline completes; polling redirects to /portfolio
+      setLoadingClientId(bgClientId);
     } catch {
       setError("Network error — please try again.");
     } finally {
       setLoading(false);
     }
+  }
+
+  if (loadingClientId) {
+    return (
+      <LoadingScreen
+        clientId={loadingClientId}
+        onError={() => {
+          setLoadingClientId(null);
+          setError("Took too long to complete — please try again.");
+        }}
+      />
+    );
   }
 
   return (

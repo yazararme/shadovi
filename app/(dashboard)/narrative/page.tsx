@@ -618,7 +618,7 @@ function NarrativeInner() {
                 </tr>
               </thead>
               <tbody>
-                {allGapGrouped.map((g) => (
+                {allGapGrouped.filter((g) => g.competitorsMentioned.length > 0).map((g) => (
                   <tr
                     key={g.queryId}
                     onClick={() => setDrawer({ runs: g.allRuns, queryText: g.queryText })}

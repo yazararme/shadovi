@@ -92,6 +92,10 @@ export interface Query {
   strategic_goal: string | null;
   relevance_score: number | null;
   status: QueryStatus;
+  // source_persona: name of the persona this query was generated for (denormalised for display).
+  source_persona: string | null;
+  // manually_added: true when the user added this query by hand rather than via generation.
+  manually_added: boolean;
   created_at: string;
 }
 

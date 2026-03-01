@@ -12,6 +12,8 @@ interface Props {
   query: Query;
   onRemove: (id: string) => void;
   onTextChange: (id: string, text: string) => void;
+  // autoEdit: true opens the textarea immediately (used for newly added queries)
+  autoEdit?: boolean;
 }
 
 const intentConfig: Record<QueryIntent, { label: string; color: string }> = {
@@ -21,11 +23,23 @@ const intentConfig: Record<QueryIntent, { label: string; color: string }> = {
   validation: { label: "Validation", color: "bg-green-100 text-green-800 border-green-200" },
 };
 
-export function QueryCard({ query, onRemove, onTextChange }: Props) {
-  const [editingText, setEditingText] = useState(false);
+// Attribution badge label logic:
+// - source_persona present → show persona name
+// - source_persona null + validation intent → "Brand Fact"
+// - source_persona null + comparative intent → nothing
+// - source_persona null + other → nothing
+function getAttributionLabel(query: Query): string | null {
+  if (query.source_persona) return query.source_persona;
+  if (query.intent === "validation") return "Brand Fact";
+  return null;
+}
+
+export function QueryCard({ query, onRemove, onTextChange, autoEdit = false }: Props) {
+  const [editingText, setEditingText] = useState(autoEdit);
   const [draft, setDraft] = useState(query.text);
   const [expanded, setExpanded] = useState(false);
   const config = intentConfig[query.intent];
+  const attributionLabel = getAttributionLabel(query);
 
   function handleTextBlur() {
     setEditingText(false);
@@ -41,19 +55,36 @@ export function QueryCard({ query, onRemove, onTextChange }: Props) {
           <div className="flex-1 min-w-0 space-y-2">
             {/* Query text */}
             {editingText ? (
-              <Textarea
-                autoFocus
-                value={draft}
-                onChange={(e) => setDraft(e.target.value)}
-                onBlur={handleTextBlur}
-                className="text-sm min-h-[60px] resize-none"
-              />
+              <div className="space-y-1.5">
+                <Textarea
+                  autoFocus
+                  value={draft}
+                  onChange={(e) => setDraft(e.target.value)}
+                  aria-label="Query text"
+                  aria-multiline="true"
+                  className="text-sm min-h-[60px] resize-none"
+                />
+                <div className="flex justify-end">
+                  <button
+                    type="button"
+                    onMouseDown={(e) => e.preventDefault()}
+                    onClick={handleTextBlur}
+                    className="text-xs font-semibold text-white bg-[#0D0437] hover:bg-[#1a1150] px-3 py-1.5 rounded-md transition-colors"
+                  >
+                    Save
+                  </button>
+                </div>
+              </div>
             ) : (
               <p
+                role="button"
+                tabIndex={0}
+                aria-label="Click to edit query text"
                 onClick={() => setEditingText(true)}
+                onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); setEditingText(true); } }}
                 className="text-sm cursor-text hover:bg-muted/50 rounded px-1 py-0.5 -mx-1"
               >
-                {query.text}
+                {query.text || <span className="text-[#9CA3AF] italic">Click to add query text…</span>}
               </p>
             )}
 
@@ -64,6 +95,14 @@ export function QueryCard({ query, onRemove, onTextChange }: Props) {
               >
                 {config.label}
               </span>
+
+              {/* Source persona / Brand Fact attribution badge */}
+              {attributionLabel && (
+                <span className="inline-flex items-center rounded-md border border-[#E2E8F0] bg-white px-2 py-0.5 text-xs text-[#6B7280]">
+                  {attributionLabel}
+                </span>
+              )}
+
               <Badge variant="outline" className="text-xs font-normal capitalize">
                 {query.phrasing_style}
               </Badge>
@@ -117,6 +156,7 @@ export function QueryCard({ query, onRemove, onTextChange }: Props) {
           <Button
             variant="ghost"
             size="icon"
+            aria-label={`Remove query: ${query.text.slice(0, 50)}`}
             className="h-6 w-6 shrink-0 opacity-0 group-hover:opacity-100 transition-opacity mt-0.5"
             onClick={() => onRemove(query.id)}
           >

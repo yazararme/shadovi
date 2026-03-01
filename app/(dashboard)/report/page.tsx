@@ -1627,11 +1627,11 @@ function SubLabel({ children }: { children: React.ReactNode }) {
 
 function CoverMetric({ label, value, color }: { label: string; value: string; color: string }) {
   return (
-    <div className="flex-1 border border-white/8 bg-white/5 rounded-lg p-5">
+    <div className="flex-1 border border-[#E2E8F0] bg-white rounded-lg p-5">
       <p className="font-serif text-[32px] font-bold leading-none mb-2" style={{ color }}>
         {value}
       </p>
-      <p className="font-mono text-[9px] text-white/40 uppercase tracking-wider leading-snug">
+      <p className="font-mono text-[9px] text-[#6B7280] uppercase tracking-wider leading-snug">
         {label}
       </p>
     </div>

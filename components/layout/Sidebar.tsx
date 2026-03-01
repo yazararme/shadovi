@@ -16,6 +16,7 @@ import {
   Brain,
   Globe,
   List,
+  Settings,
 } from "lucide-react";
 import type { Client } from "@/types";
 
@@ -136,6 +137,22 @@ function SidebarInner({ onSignOut }: { onSignOut: () => void }) {
           );
         })}
       </nav>
+
+      {/* Settings — separated from main nav by a divider */}
+      <div className="border-t border-white/10 pt-2 mt-2">
+        <Link
+          href={`/settings/brand-profile${clientParam}`}
+          className={cn(
+            "flex items-center gap-3 rounded-md px-3 py-2 text-sm transition-colors",
+            pathname.startsWith("/settings")
+              ? "bg-white/10 text-white font-bold"
+              : "font-medium text-white/60 hover:bg-white/8 hover:text-white"
+          )}
+        >
+          <Settings className="h-4 w-4" />
+          Settings
+        </Link>
+      </div>
 
       {/* Sign out */}
       <button
