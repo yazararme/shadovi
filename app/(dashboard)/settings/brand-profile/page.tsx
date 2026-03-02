@@ -551,6 +551,7 @@ function FactsModal({ data, clientId, onSave, onClose }: {
     const f: BrandFact = {
       id: crypto.randomUUID(), client_id: clientId, claim: newClaim.trim(),
       category: newCategory, is_true: newIsTrue, created_at: new Date().toISOString(),
+      version_id: null,
     };
     setDraft((p) => [...p, f]);
     setNewClaim("");

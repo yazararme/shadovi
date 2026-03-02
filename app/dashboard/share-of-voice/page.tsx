@@ -284,6 +284,20 @@ function ShareOfVoiceInner() {
 
       if (!c) { setLoading(false); return; }
 
+      // Fetch active version (lightweight) to scope tracking_runs to current portfolio
+      const { data: versionRow } = await supabase
+        .from("portfolio_versions")
+        .select("id")
+        .eq("client_id", c.id)
+        .eq("is_active", true)
+        .limit(1)
+        .single();
+      const activeVersionId = (versionRow as { id?: string } | null)?.id ?? null;
+
+      let runsQ = supabase.from("tracking_runs").select("*").eq("client_id", c.id)
+        .order("ran_at", { ascending: false }).limit(10000);
+      if (activeVersionId) runsQ = runsQ.eq("version_id", activeVersionId);
+
       // Parallel fetches
       const [
         { data: runData },
@@ -293,8 +307,7 @@ function ShareOfVoiceInner() {
         { data: clusterData },
         { data: recData },
       ] = await Promise.all([
-        supabase.from("tracking_runs").select("*").eq("client_id", c.id)
-          .order("ran_at", { ascending: false }).limit(10000),
+        runsQ,
         supabase.from("queries").select("id, text, intent").eq("client_id", c.id).limit(2000),
         supabase.from("competitors").select("*").eq("client_id", c.id).order("name"),
         supabase.from("response_brand_mentions")
@@ -344,9 +357,10 @@ function ShareOfVoiceInner() {
         // Targeted run fetch for cluster queries
         const allCQIds = Array.from(cqMap.values()).flatMap((s) => Array.from(s));
         if (allCQIds.length > 0) {
-          const { data: cRunData } = await supabase
-            .from("tracking_runs").select("*").in("query_id", allCQIds)
+          let cRunQ = supabase.from("tracking_runs").select("*").in("query_id", allCQIds)
             .eq("client_id", c.id).order("ran_at", { ascending: false }).limit(5000);
+          if (activeVersionId) cRunQ = cRunQ.eq("version_id", activeVersionId);
+          const { data: cRunData } = await cRunQ;
           if (cancelled) return;
           setClusterRuns((cRunData ?? []).map((r) => ({
             ...(r as TrackingRun),

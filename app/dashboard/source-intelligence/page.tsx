@@ -352,12 +352,24 @@ function SourceIntelInner() {
       return;
     }
 
+    // Fetch active version to scope runs to current portfolio
+    const { data: versionRow } = await supabase
+      .from("portfolio_versions")
+      .select("id")
+      .eq("client_id", activeClient.id)
+      .eq("is_active", true)
+      .limit(1)
+      .single();
+    const activeVersionId = (versionRow as { id?: string } | null)?.id ?? null;
+
     // Fetch tracking_runs for client (id + query_id + model needed for join + model filter)
-    const { data: runsData } = await supabase
+    let runsQ = supabase
       .from("tracking_runs")
       .select("id, query_id, model")
       .eq("client_id", activeClient.id)
       .limit(10000);
+    if (activeVersionId) runsQ = runsQ.eq("version_id", activeVersionId);
+    const { data: runsData } = await runsQ;
 
     const runs = (runsData ?? []) as RunRow[];
     const newRunMap = new Map<string, RunRow>();

@@ -28,6 +28,7 @@ interface EnrichedRun {
   source_attribution: string[] | null;
   content_age_estimate: string | null;
   raw_response: string | null;
+  bait_triggered: boolean;
 }
 
 // A group of runs sharing the same query text + model + calendar date
@@ -40,6 +41,7 @@ interface RunGroup {
   runs: EnrichedRun[];
   latestRanAt: string;
   latestSentiment: string | null;
+  hasBait: boolean;
 }
 
 type IntentFilter = QueryIntent | "all";
@@ -140,6 +142,7 @@ const EXPORT_FIELDS: Array<{ key: string; label: string; always?: boolean }> = [
   { key: "competitors_mentioned", label: "Competitors Mentioned" },
   { key: "source_attribution",   label: "Source Attribution" },
   { key: "content_age_estimate", label: "Content Age Est." },
+  { key: "bait_triggered",       label: "Bait Triggered" },
   { key: "raw_response",         label: "Raw Response" },
 ];
 
@@ -195,6 +198,7 @@ function groupRuns(runs: EnrichedRun[]): RunGroup[] {
         existing.latestRanAt     = run.ran_at;
         existing.latestSentiment = run.mention_sentiment;
       }
+      if (run.bait_triggered) existing.hasBait = true;
     } else {
       map.set(key, {
         key,
@@ -205,6 +209,7 @@ function groupRuns(runs: EnrichedRun[]): RunGroup[] {
         runs:            [run],
         latestRanAt:     run.ran_at,
         latestSentiment: run.mention_sentiment,
+        hasBait:         run.bait_triggered,
       });
     }
   }
@@ -272,6 +277,7 @@ function QueryRunsInner() {
   const [modelFilter,  setModelFilter]  = useState<ModelFilter>("all");
   const [page,         setPage]         = useState(0);
   const [expandedKeys, setExpandedKeys] = useState<Set<string>>(new Set());
+  const [isAdmin, setIsAdmin] = useState(false);
 
   // Export field picker
   const [exportOpen,   setExportOpen]   = useState(false);
@@ -301,6 +307,13 @@ function QueryRunsInner() {
   async function loadData() {
     setLoading(true);
     const supabase = createClient();
+
+    // Check admin status — bypasses daily run limit for the admin account
+    const { data: { user } } = await supabase.auth.getUser();
+    if (user?.email && process.env.NEXT_PUBLIC_ADMIN_EMAIL) {
+      setIsAdmin(user.email === process.env.NEXT_PUBLIC_ADMIN_EMAIL);
+    }
+
     let q = supabase.from("clients").select("*").eq("status", "active");
     if (clientIdParam) q = q.eq("id", clientIdParam);
     const { data: clients } = await q.order("created_at", { ascending: false }).limit(1);
@@ -308,19 +321,42 @@ function QueryRunsInner() {
     setClient(activeClient);
 
     if (activeClient) {
-      const [{ data: runsData }, { data: queriesData }] = await Promise.all([
-        supabase
-          .from("tracking_runs")
-          .select("id, query_id, model, ran_at, mention_sentiment, query_intent, brand_mentioned, mention_position, brand_positioning, citation_present, share_of_model_score, competitors_mentioned, source_attribution, content_age_estimate, raw_response")
-          .eq("client_id", activeClient.id)
-          .order("ran_at", { ascending: false })
-          .limit(5000),
+      // Fetch active version first to scope runs to current portfolio
+      const { data: versionRow } = await supabase
+        .from("portfolio_versions")
+        .select("id")
+        .eq("client_id", activeClient.id)
+        .eq("is_active", true)
+        .limit(1)
+        .single();
+      const activeVersionId = (versionRow as { id?: string } | null)?.id ?? null;
+
+      let runsQ = supabase
+        .from("tracking_runs")
+        .select("id, query_id, model, ran_at, mention_sentiment, query_intent, brand_mentioned, mention_position, brand_positioning, citation_present, share_of_model_score, competitors_mentioned, source_attribution, content_age_estimate, raw_response")
+        .eq("client_id", activeClient.id)
+        .order("ran_at", { ascending: false })
+        .limit(5000);
+      if (activeVersionId) runsQ = runsQ.eq("version_id", activeVersionId);
+
+      const [{ data: runsData }, { data: queriesData }, { data: baitRows }] = await Promise.all([
+        runsQ,
         supabase
           .from("queries")
           .select("id, text, intent")
           .eq("client_id", activeClient.id)
           .limit(2000),
+        // Fetch only the run IDs that had bait_triggered=true — lightweight join
+        supabase
+          .from("brand_knowledge_scores")
+          .select("tracking_run_id")
+          .eq("client_id", activeClient.id)
+          .eq("bait_triggered", true),
       ]);
+
+      const baitRunIds = new Set(
+        (baitRows ?? []).map((s: { tracking_run_id: string }) => s.tracking_run_id)
+      );
 
       const queryMap = new Map<string, { text: string; intent: string }>();
       (queriesData ?? []).forEach((q: { id: string; text: string; intent: string }) =>
@@ -351,6 +387,7 @@ function QueryRunsInner() {
         source_attribution:    r.source_attribution,
         content_age_estimate:  r.content_age_estimate,
         raw_response:          r.raw_response,
+        bait_triggered:        baitRunIds.has(r.id),
       }));
 
       setAllRuns(enriched);
@@ -443,10 +480,12 @@ function QueryRunsInner() {
   const rangeStart = page * PAGE_SIZE + 1;
   const rangeEnd   = Math.min((page + 1) * PAGE_SIZE, total);
 
-  // Daily run limit — allRuns is sorted desc, so [0] is most recent
+  // Daily run limit — allRuns is sorted desc, so [0] is most recent.
+  // Admin bypasses this restriction entirely.
   const todayStartUTC = new Date();
   todayStartUTC.setUTCHours(0, 0, 0, 0);
   const isBlockedByDailyLimit =
+    !isAdmin &&
     client?.tracking_frequency !== "daily" &&
     allRuns.some((r) => new Date(r.ran_at) >= todayStartUTC);
   const lastRunAt = allRuns[0]?.ran_at ?? null;
@@ -647,9 +686,16 @@ function QueryRunsInner() {
                     >
                       {/* Intent */}
                       <td className="px-4 py-3">
-                        <span className={`text-[9px] font-bold uppercase tracking-wide px-1.5 py-0.5 rounded border whitespace-nowrap ${intentStyle}`}>
-                          {INTENT_LABEL[group.query_intent]}
-                        </span>
+                        <div className="flex items-center gap-1 flex-wrap">
+                          <span className={`text-[9px] font-bold uppercase tracking-wide px-1.5 py-0.5 rounded border whitespace-nowrap ${intentStyle}`}>
+                            {INTENT_LABEL[group.query_intent]}
+                          </span>
+                          {group.hasBait && (
+                            <span className="text-[8px] font-bold uppercase tracking-wide px-1 py-0.5 rounded border bg-[rgba(255,75,110,0.08)] text-[#FF4B6E] border-[rgba(255,75,110,0.2)] whitespace-nowrap">
+                              Bait ✓
+                            </span>
+                          )}
+                        </div>
                       </td>
 
                       {/* Query */}
@@ -697,7 +743,13 @@ function QueryRunsInner() {
                         key={run.id}
                         className="border-b bg-[rgba(244,246,249,0.5)] last:border-0"
                       >
-                        <td className="px-4 py-2" />
+                        <td className="px-4 py-2">
+                          {run.bait_triggered && (
+                            <span className="text-[8px] font-bold uppercase tracking-wide px-1 py-0.5 rounded border bg-[rgba(255,75,110,0.08)] text-[#FF4B6E] border-[rgba(255,75,110,0.2)] whitespace-nowrap">
+                              Bait ✓
+                            </span>
+                          )}
+                        </td>
                         <td className="pl-8 pr-4 py-2">
                           <span className="text-[10px] text-[#9CA3AF]">
                             {new Date(run.ran_at).toLocaleString([], {

@@ -19,6 +19,31 @@ export interface BrandDNA {
   strategic_battlegrounds: string[];
 }
 
+// ─── Portfolio Versioning ─────────────────────────────────────────────────────
+
+export type VersionTrigger =
+  | 'onboarding_activation'
+  | 'manual_regeneration'
+  | 'settings_edit'
+  | 'calibration_prompt';
+
+export interface PortfolioVersion {
+  id: string;
+  client_id: string;
+  version_number: number;
+  created_at: string;
+  trigger: VersionTrigger;
+  change_summary: {
+    queries_added: number;
+    queries_removed: number;
+    facts_changed: string[];
+    competitors_changed: string[];
+  } | null;
+  query_count: number;
+  fact_count: number;
+  is_active: boolean;
+}
+
 // ─── Database Row Types ───────────────────────────────────────────────────────
 
 export interface Client {
@@ -97,6 +122,8 @@ export interface Query {
   // manually_added: true when the user added this query by hand rather than via generation.
   manually_added: boolean;
   created_at: string;
+  // null for pre-versioning records
+  version_id: string | null;
 }
 
 // ─── Brand Knowledge ──────────────────────────────────────────────────────────
@@ -112,6 +139,7 @@ export interface BrandFact {
   // whether LLMs confidently invent things the brand doesn't offer.
   is_true: boolean;
   created_at: string;
+  version_id: string | null;
 }
 
 export type KnowledgeAccuracy = "correct" | "incorrect" | "uncertain";
@@ -132,6 +160,7 @@ export interface BrandKnowledgeScore {
   // bait_triggered: true when a bait query caused the LLM to confirm a false claim (accuracy=incorrect)
   bait_triggered: boolean;
   brand_positioning: BrandPositioning | null;
+  version_id: string | null;
 }
 
 export type LLMModel = "gpt-4o" | "claude-sonnet-4-6" | "perplexity" | "gemini" | "deepseek";
@@ -167,6 +196,7 @@ export interface TrackingRun {
   competitor_mentions_unprompted: { competitor: string; context: string }[] | null;
   // brand_positioning: populated by Haiku scorer for validation queries
   brand_positioning: BrandPositioning | null;
+  version_id: string | null;
 }
 
 // ─── Gap Clusters ─────────────────────────────────────────────────────────────

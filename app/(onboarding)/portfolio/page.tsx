@@ -576,6 +576,7 @@ function FactsModal({ data, clientId, onSave, onClose }: {
     const f: BrandFact = {
       id: crypto.randomUUID(), client_id: clientId, claim: newClaim.trim(),
       category: newCategory, is_true: newIsTrue, created_at: new Date().toISOString(),
+      version_id: null,
     };
     setDraft((p) => [...p, f]);
     setNewClaim("");
@@ -835,24 +836,27 @@ function LeftPanel({ queries, setQueries, activeIntent, setActiveIntent, isDirty
           </button>
         )}
       </div>
-      <div className="sticky bottom-0 bg-white border-t border-[#E2E8F0] p-4">
-        <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground mb-2">
-          Fine-tune your portfolio
-        </p>
-        <div className="flex gap-2">
-          <input
-            type="text"
-            value={calibrationInput}
-            onChange={(e) => setCalibrationInput(e.target.value)}
-            onKeyDown={(e) => { if (e.key === "Enter" && !isCalibrating) onCalibrate(); }}
-            placeholder='e.g. "Make problem-aware queries more urgent"'
-            aria-label="Calibration instruction"
-            className="flex-1 text-sm border border-[#E2E8F0] rounded-lg px-3 py-2 outline-none focus:ring-2 focus:ring-[#0D0437]/20 focus:border-[#0D0437] bg-[#F4F6F9] placeholder:text-[#9CA3AF]" />
-          <Button size="sm" onClick={onCalibrate} disabled={isCalibrating || !calibrationInput.trim()}
-            aria-label="Apply calibration instruction"
-            className="bg-[#0D0437] hover:bg-[#1a1150] text-white shrink-0">
-            {isCalibrating ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : "Apply"}
-          </Button>
+      <div className="sticky bottom-0 bg-white border-t border-[#E2E8F0] px-4 py-3">
+        <div className="bg-[#F5F3FF] rounded-xl p-4 mx-4 mb-4 space-y-2.5">
+          <p className="text-xs font-semibold uppercase tracking-wide text-[#0D0437] mb-0">
+            Fine-tune your portfolio
+          </p>
+          <p className="text-[11px] text-[#6B7280]">Describe changes and AI will rewrite matching queries.</p>
+          <div className="flex gap-2">
+            <input
+              type="text"
+              value={calibrationInput}
+              onChange={(e) => setCalibrationInput(e.target.value)}
+              onKeyDown={(e) => { if (e.key === "Enter" && !isCalibrating) onCalibrate(); }}
+              placeholder='e.g. "Make problem-aware queries more urgent"'
+              aria-label="Calibration instruction"
+              className="flex-1 text-sm border border-[#E2E8F0] rounded-lg px-3 py-2 outline-none bg-white text-[#0D0437] placeholder:text-[#9CA3AF] focus:border-[#7C3AED]" />
+            <Button size="sm" onClick={onCalibrate} disabled={isCalibrating || !calibrationInput.trim()}
+              aria-label="Apply calibration instruction"
+              className="bg-[#7C3AED] hover:bg-[#6D28D9] text-white shrink-0 border-0">
+              {isCalibrating ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : "Apply"}
+            </Button>
+          </div>
         </div>
       </div>
     </div>
@@ -893,7 +897,7 @@ function ConfigCard({ icon, title, summary, expanded, onToggle, onEdit, hasDot, 
             <button onClick={onEdit}
               aria-label={`Edit ${title}`} aria-haspopup="dialog"
               className="text-xs text-[#0D0437] border border-[#E2E8F0] hover:border-[#0D0437] px-2 py-1 rounded transition-colors">
-              Edit
+              Review & Edit
             </button>
           </div>
           <ChevronDown className={`h-4 w-4 text-muted-foreground transition-transform ${expanded ? "rotate-180" : ""}`} />
@@ -942,8 +946,22 @@ function RightPanel({ data, queries, onEdit, selectedModels, setSelectedModels, 
             <>
               <p className="text-xs text-muted-foreground"><span className="font-medium text-[#0D0437]">Category:</span> {dna.category_name}</p>
               <p className="text-xs text-muted-foreground"><span className="font-medium text-[#0D0437]">POV:</span> {dna.brand_pov.length > 80 ? `${dna.brand_pov.slice(0, 80)}…` : dna.brand_pov}</p>
-              <p className="text-xs text-muted-foreground"><span className="font-medium text-[#0D0437]">Use cases:</span> {dna.use_cases?.length ?? 0}</p>
-              <p className="text-xs text-muted-foreground"><span className="font-medium text-[#0D0437]">Differentiators:</span> {dna.differentiators?.length ?? 0}</p>
+              {(dna.use_cases ?? []).slice(0, 3).map((uc, i) => (
+                <p key={i} className="text-xs text-muted-foreground"><span className="font-medium text-[#0D0437]">Use case:</span> {uc}</p>
+              ))}
+              {(dna.use_cases?.length ?? 0) > 3 && (
+                <button onClick={() => onEdit("dna")} className="text-xs text-[#6B7280] hover:text-[#0D0437] mt-1 transition-colors">
+                  +{(dna.use_cases?.length ?? 0) - 3} more — click to view & edit
+                </button>
+              )}
+              {(dna.differentiators ?? []).slice(0, 3).map((d, i) => (
+                <p key={i} className="text-xs text-muted-foreground"><span className="font-medium text-[#0D0437]">Differentiator:</span> {d}</p>
+              ))}
+              {(dna.differentiators?.length ?? 0) > 3 && (
+                <button onClick={() => onEdit("dna")} className="text-xs text-[#6B7280] hover:text-[#0D0437] mt-1 transition-colors">
+                  +{(dna.differentiators?.length ?? 0) - 3} more — click to view & edit
+                </button>
+              )}
             </>
           ) : <p className="text-xs text-muted-foreground italic">No brand DNA configured.</p>}
         </ConfigCard>
@@ -954,7 +972,14 @@ function RightPanel({ data, queries, onEdit, selectedModels, setSelectedModels, 
           hasDot={dirtySections.has("competitors")}>
           {competitors.length === 0
             ? <p className="text-xs text-muted-foreground italic">No competitors added.</p>
-            : <div className="space-y-1">{competitors.map((c) => <p key={c.id} className="text-xs text-[#0D0437]">{c.name}</p>)}</div>}
+            : <div className="space-y-1">
+                {competitors.slice(0, 3).map((c) => <p key={c.id} className="text-xs text-[#0D0437]">{c.name}</p>)}
+                {competitors.length > 3 && (
+                  <button onClick={() => onEdit("competitors")} className="text-xs text-[#6B7280] hover:text-[#0D0437] mt-1 transition-colors">
+                    +{competitors.length - 3} more — click to view & edit
+                  </button>
+                )}
+              </div>}
         </ConfigCard>
 
         <ConfigCard icon={<Users className="h-4 w-4" />} title="Buyer Personas"
@@ -963,9 +988,16 @@ function RightPanel({ data, queries, onEdit, selectedModels, setSelectedModels, 
           hasDot={dirtySections.has("personas")}>
           {personas.length === 0
             ? <p className="text-xs text-muted-foreground italic">No personas generated.</p>
-            : <div className="space-y-2">{personas.map((p) => (
-                <div key={p.id}><p className="text-xs font-medium text-[#0D0437]">{p.name}</p><p className="text-xs text-muted-foreground">{p.role}</p></div>
-              ))}</div>}
+            : <div className="space-y-2">
+                {personas.slice(0, 3).map((p) => (
+                  <div key={p.id}><p className="text-xs font-medium text-[#0D0437]">{p.name}</p><p className="text-xs text-muted-foreground">{p.role}</p></div>
+                ))}
+                {personas.length > 3 && (
+                  <button onClick={() => onEdit("personas")} className="text-xs text-[#6B7280] hover:text-[#0D0437] mt-1 transition-colors">
+                    +{personas.length - 3} more — click to view & edit
+                  </button>
+                )}
+              </div>}
         </ConfigCard>
 
         <ConfigCard icon={<ShieldCheck className="h-4 w-4" />} title="Brand Facts"
@@ -974,13 +1006,18 @@ function RightPanel({ data, queries, onEdit, selectedModels, setSelectedModels, 
           hasDot={dirtySections.has("facts")}>
           {facts.length === 0
             ? <p className="text-xs text-muted-foreground italic">No brand facts added.</p>
-            : <div className="space-y-1">{facts.slice(0, 3).map((f) => (
-                <p key={f.id} className="text-xs text-muted-foreground">
-                  {f.claim.length > 60 ? `${f.claim.slice(0, 60)}…` : f.claim}
-                </p>
-              ))}
-              {facts.length > 3 && <p className="text-xs text-muted-foreground italic">+{facts.length - 3} more</p>}
-            </div>}
+            : <div className="space-y-1">
+                {facts.slice(0, 3).map((f) => (
+                  <p key={f.id} className="text-xs text-muted-foreground">
+                    {f.claim.length > 60 ? `${f.claim.slice(0, 60)}…` : f.claim}
+                  </p>
+                ))}
+                {facts.length > 3 && (
+                  <button onClick={() => onEdit("facts")} className="text-xs text-[#6B7280] hover:text-[#0D0437] mt-1 transition-colors">
+                    +{facts.length - 3} more — click to view & edit
+                  </button>
+                )}
+              </div>}
         </ConfigCard>
       </div>
 
@@ -1068,7 +1105,7 @@ function RightPanel({ data, queries, onEdit, selectedModels, setSelectedModels, 
             : "Start Monitoring →"}
         </button>
         <p className="text-xs text-muted-foreground text-center mt-2">
-          Your first report will be ready in ~4 hours.
+          Your first Roadmap and intelligence report will be ready in ~4 hours.
         </p>
       </div>
     </div>
@@ -1201,24 +1238,54 @@ function PortfolioInner() {
     setActivating(true);
     try {
       const supabase = createClient();
+
+      // Steps 1+2: persist tracking config and mark client active
       await supabase.from("clients").update({
         selected_models: selectedModels,
         tracking_frequency: selectedFrequency,
         status: "active",
       }).eq("id", clientId);
 
-      const activeQueryIds = queries.filter((q) => q.status !== "removed").map((q) => q.id);
-      if (activeQueryIds.length > 0) {
-        await supabase.from("queries").update({ status: "active" }).in("id", activeQueryIds);
+      // Step 3: query regeneration — guarded to protect pre-seeded portfolios.
+      // The generate endpoint deletes all existing queries before inserting new ones,
+      // so we must skip it when active queries already exist (admin-seeded accounts).
+      const { count } = await supabase
+        .from("queries")
+        .select("*", { count: "exact", head: true })
+        .eq("client_id", clientId)
+        .eq("status", "active");
+
+      if ((count ?? 0) === 0) {
+        // No pre-seeded queries: generate the portfolio and promote to active
+        await fetch("/api/queries/generate", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ clientId }),
+        });
+        await supabase
+          .from("queries")
+          .update({ status: "active" })
+          .eq("client_id", clientId)
+          .eq("status", "pending_approval");
+      } else {
+        // Pre-seeded account: activate any pending queries from the current session
+        const activeQueryIds = queries
+          .filter((q) => q.status !== "removed")
+          .map((q) => q.id);
+        if (activeQueryIds.length > 0) {
+          await supabase.from("queries").update({ status: "active" }).in("id", activeQueryIds);
+        }
       }
 
+      // Step 4: trigger first tracking run
       await fetch("/api/inngest", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ name: "tracking/run.scheduled", data: { clientId } }),
       });
 
-      router.push(`/overview?client=${clientId}`);
+      // Step 5: navigate to dashboard
+      router.push(`/dashboard/overview?client=${clientId}`);
     } catch {
       toast.error("Something went wrong. Please try again.");
       setActivating(false);

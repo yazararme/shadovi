@@ -165,32 +165,31 @@ function QueriesPageInner() {
     }
 
     setActivating(true);
-    const supabase = createClient();
 
-    await supabase
-      .from("queries")
-      .update({ status: "active" })
-      .eq("client_id", clientId)
-      .eq("status", "pending_approval");
-
-    const { error } = await supabase
-      .from("clients")
-      .update({ status: "active" })
-      .eq("id", clientId);
+    // Creates portfolio version 1, stamps query version_ids, and activates client.
+    // Version creation must complete before the tracking run fires so the runner
+    // can read version_id from queries and stamp it on tracking_runs.
+    const activateRes = await fetch("/api/versioning/activate", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ clientId }),
+    });
 
     setActivating(false);
 
-    if (error) {
-      toast.error("Failed to activate: " + error.message);
-    } else {
-      // Don't await — first tracking run happens async
-      fetch("/api/tracking/run", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ clientId }),
-      });
-      router.push("/overview");
+    if (!activateRes.ok) {
+      const body = await activateRes.json();
+      toast.error("Failed to activate: " + (body.error ?? activateRes.statusText));
+      return;
     }
+
+    // Don't await — first tracking run happens async in the background
+    fetch("/api/tracking/run", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ clientId }),
+    });
+    router.push("/overview");
   }
 
   const activeCount = queries.filter((q) => q.status !== "removed").length;

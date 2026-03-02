@@ -13,6 +13,7 @@ import { toast } from "sonner";
 import { RefreshCw, ArrowRight } from "lucide-react";
 import Link from "next/link";
 import type { Client, TrackingRun, Recommendation, LLMModel } from "@/types";
+import { computeBVI, type BVIScoreInput } from "@/lib/bvi/compute-bvi";
 
 // ── Constants ──────────────────────────────────────────────────────────────────
 
@@ -183,6 +184,7 @@ function OverviewInner() {
   const [nssLoading, setNssLoading] = useState(true);
   const [sourceLoading, setSourceLoading] = useState(true);
   const [competitorRateLoading, setCompetitorRateLoading] = useState(true);
+  const [bviLoading, setBviLoading] = useState(true);
 
   // Data
   const [runs, setRuns] = useState<TrackingRun[]>([]);
@@ -196,10 +198,13 @@ function OverviewInner() {
   const [sourceCount, setSourceCount] = useState(0);
   // Competitors sorted by unaided mention count desc (name = display name from response_brand_mentions)
   const [competitorRanks, setCompetitorRanks] = useState<{ name: string; mentions: number }[]>([]);
+  const [bviComposite, setBviComposite] = useState<number | null>(null);
+  const [bviBaitRunsTotal, setBviBaitRunsTotal] = useState(0);
 
   // UI state
   const [running, setRunning] = useState(false);
   const [drawer, setDrawer] = useState<DrawerState | null>(null);
+  const [isAdmin, setIsAdmin] = useState(false);
 
   // ── Load data ──────────────────────────────────────────────────────────────
 
@@ -209,6 +214,13 @@ function OverviewInner() {
     async function loadClient() {
       setClientLoading(true);
       const supabase = createClient();
+
+      // Check admin status — bypasses daily run limit for the admin account
+      const { data: { user } } = await supabase.auth.getUser();
+      if (user?.email && process.env.NEXT_PUBLIC_ADMIN_EMAIL) {
+        setIsAdmin(user.email === process.env.NEXT_PUBLIC_ADMIN_EMAIL);
+      }
+
       const q = supabase.from("clients").select("*").eq("status", "active");
       const { data } = await (clientIdParam ? q.eq("id", clientIdParam) : q)
         .order("created_at", { ascending: false })
@@ -225,19 +237,35 @@ function OverviewInner() {
         setNssLoading(false);
         setSourceLoading(false);
         setCompetitorRateLoading(false);
+        setBviLoading(false);
         return;
       }
 
       setTrackedModels((c.selected_models ?? []) as LLMModel[]);
 
+      // Fetch the active portfolio version before firing data queries so we can
+      // filter tracking_runs and brand_knowledge_scores to the current version.
+      // Null means no version exists yet (pre-versioning client) — show all data.
+      const { data: versionRow } = await supabase
+        .from("portfolio_versions")
+        .select("id")
+        .eq("client_id", c.id)
+        .eq("is_active", true)
+        .limit(1)
+        .single();
+      const activeVersionId = versionRow?.id ?? null;
+      if (cancelled) return;
+
       // Fire all section queries in parallel — each updates its own state
       const supabase2 = createClient();
 
       // Runs + queries (feeds: metrics, sentiment, chart, activity)
-      supabase2
+      let runsQ = supabase2
         .from("tracking_runs")
         .select("*")
-        .eq("client_id", c.id)
+        .eq("client_id", c.id);
+      if (activeVersionId) runsQ = runsQ.eq("version_id", activeVersionId);
+      runsQ
         .order("ran_at", { ascending: false })
         .limit(5000)
         .then(({ data: runData }) => {
@@ -259,11 +287,12 @@ function OverviewInner() {
         });
 
       // Brand knowledge scores (feeds: fact accuracy card)
-      supabase2
+      let kScoresQ = supabase2
         .from("brand_knowledge_scores")
         .select("accuracy")
-        .eq("client_id", c.id)
-        .then(({ data: kData }) => {
+        .eq("client_id", c.id);
+      if (activeVersionId) kScoresQ = kScoresQ.eq("version_id", activeVersionId);
+      kScoresQ.then(({ data: kData }) => {
           if (cancelled) return;
           const rows = (kData ?? []) as { accuracy: string }[];
           setKnowledgeCorrect(rows.filter((r) => r.accuracy === "correct").length);
@@ -310,10 +339,9 @@ function OverviewInner() {
       // Source attribution count (distinct attributed domains across all runs)
       // Fetches run IDs first, then chunks run_sources queries to stay within URL limits
       (async () => {
-        const { data: runIdData } = await supabase2
-          .from("tracking_runs")
-          .select("id")
-          .eq("client_id", c.id);
+        let runIdQ = supabase2.from("tracking_runs").select("id").eq("client_id", c.id);
+        if (activeVersionId) runIdQ = runIdQ.eq("version_id", activeVersionId);
+        const { data: runIdData } = await runIdQ;
         if (cancelled || !runIdData?.length) { setSourceLoading(false); return; }
 
         const allRunIds = (runIdData as { id: string }[]).map((r) => r.id);
@@ -371,6 +399,55 @@ function OverviewInner() {
         setCompetitorRanks(sorted);
         setCompetitorRateLoading(false);
       })();
+
+      // BVI — needs 3 joins (scores, facts, run→model). Own lightweight parallel fetch.
+      (async () => {
+        const [{ data: bviScores }, { data: bviFacts }, { data: bviRunModels }] = await Promise.all([
+          supabase2
+            .from("brand_knowledge_scores")
+            .select("fact_id, bait_triggered, tracking_run_id")
+            .eq("client_id", c.id),
+          supabase2
+            .from("brand_facts")
+            .select("id, is_true, claim")
+            .eq("client_id", c.id),
+          supabase2
+            .from("tracking_runs")
+            .select("id, model")
+            .eq("client_id", c.id),
+        ]);
+        if (cancelled) return;
+
+        const factLookup = new Map<string, { is_true: boolean; claim: string }>();
+        (bviFacts ?? []).forEach((f: { id: string; is_true: boolean; claim: string }) =>
+          factLookup.set(f.id, { is_true: f.is_true, claim: f.claim })
+        );
+        const runModelLookup = new Map<string, LLMModel>();
+        (bviRunModels ?? []).forEach((r: { id: string; model: LLMModel }) =>
+          runModelLookup.set(r.id, r.model)
+        );
+
+        const bviInputs = (bviScores ?? [])
+          .map((s: { fact_id: string | null; bait_triggered: boolean; tracking_run_id: string }): BVIScoreInput | null => {
+            if (!s.fact_id) return null;
+            const fact = factLookup.get(s.fact_id);
+            const model = runModelLookup.get(s.tracking_run_id);
+            if (!fact || !model) return null;
+            return {
+              fact_id: s.fact_id,
+              fact_is_true: fact.is_true,
+              fact_claim: fact.claim,
+              bait_triggered: s.bait_triggered,
+              model,
+            };
+          })
+          .filter((x): x is BVIScoreInput => x !== null);
+
+        const bviResult = computeBVI(bviInputs, (c.selected_models ?? []) as string[]);
+        setBviComposite(bviResult.composite);
+        setBviBaitRunsTotal(bviResult.baitRunsTotal);
+        setBviLoading(false);
+      })();
     }
 
     loadClient();
@@ -407,8 +484,8 @@ function OverviewInner() {
     return (
       <div className="p-8 max-w-[1000px] mx-auto space-y-6">
         <Skeleton className="h-8 w-40" />
-        <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
-          {[0, 1, 2, 3].map((i) => (
+        <div className="grid grid-cols-2 sm:grid-cols-5 gap-4">
+          {[0, 1, 2, 3, 4].map((i) => (
             <div key={i} className="bg-white border border-[#E2E8F0] rounded-xl p-5 space-y-3">
               <Skeleton className="h-3 w-24" />
               <Skeleton className="h-8 w-16" />
@@ -522,10 +599,12 @@ function OverviewInner() {
 
   const hasNoData = !runsLoading && runs.length === 0;
 
-  // Daily run limit: blocked when non-daily client already has a run today
+  // Daily run limit: blocked when non-daily client already has a run today.
+  // Admin bypasses this restriction entirely.
   const todayStartUTC = new Date();
   todayStartUTC.setUTCHours(0, 0, 0, 0);
   const isBlockedByDailyLimit =
+    !isAdmin &&
     !runsLoading &&
     client.tracking_frequency !== "daily" &&
     runs.some((r) => new Date(r.ran_at) >= todayStartUTC);
@@ -606,7 +685,7 @@ function OverviewInner() {
       ) : (
         <>
           {/* ── Hero Metrics ─────────────────────────────────────────────────── */}
-          <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 mt-2">
+          <div className="grid grid-cols-2 sm:grid-cols-5 gap-4 mt-2">
             <MetricCard
               label="Unaided Visibility"
               value={runsLoading ? "—" : `${unaidedRate}%`}
@@ -637,6 +716,30 @@ function OverviewInner() {
               interpretation={sourceLoading ? "" : "Domains influencing AI answers about your brand"}
               loading={sourceLoading}
               href={`/dashboard/source-intelligence${clientIdParam ? `?client=${clientIdParam}` : ""}`}
+            />
+            {/* BVI — inverted: lower score = less vulnerable = green */}
+            <MetricCard
+              label="Brand Vulnerability"
+              value={bviLoading ? "—" : bviBaitRunsTotal > 0 && bviComposite !== null ? `${bviComposite}` : "—"}
+              interpretation={
+                bviLoading ? "" :
+                bviBaitRunsTotal === 0
+                  ? "Add false claim tests in Brand Facts to enable."
+                  : bviComposite !== null && bviComposite <= 15
+                    ? "Low vulnerability — LLMs rarely confirm false claims."
+                    : bviComposite !== null && bviComposite <= 40
+                      ? "Moderate vulnerability — some false claims confirmed."
+                      : "High vulnerability — LLMs frequently confirm false claims."
+              }
+              loading={bviLoading}
+              href={`/dashboard/brand-knowledge${clientIdParam ? `?client=${clientIdParam}` : ""}`}
+              valueColor={
+                !bviLoading && bviComposite !== null && bviBaitRunsTotal > 0
+                  ? bviComposite <= 15 ? "text-[#1A8F5C]"
+                  : bviComposite <= 40 ? "text-[#F59E0B]"
+                  : "text-[#FF4B6E]"
+                  : undefined
+              }
             />
           </div>
 

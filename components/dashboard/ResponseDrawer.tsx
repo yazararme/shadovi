@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import React, { useEffect, useState } from "react";
 import { X, ChevronDown } from "lucide-react";
 import type { LLMModel } from "@/types";
 
@@ -41,37 +41,143 @@ const MODEL_BADGE: Record<LLMModel, string> = {
   "deepseek": "bg-[rgba(99,102,241,0.1)] text-[#6366f1] border-[rgba(99,102,241,0.2)]",
 };
 
-// Splits text into parts, wrapping brand-name occurrences in <mark> elements.
-function HighlightedResponse({
-  text,
-  brandName,
-}: {
-  text: string;
-  brandName: string;
-}) {
-  if (!brandName || !text) return <>{text}</>;
+// ─── Markdown renderer ────────────────────────────────────────────────────────
 
-  const escaped = brandName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  const parts = text.split(new RegExp(`(${escaped})`, "gi"));
-  const lowerBrand = brandName.toLowerCase();
+/**
+ * Renders inline markdown within a single line:
+ *   - Strips citation refs like [1][2][3]
+ *   - **bold** → <strong>
+ *   - Brand name occurrences → amber <mark>
+ */
+function renderInline(text: string, brandName: string): React.ReactNode {
+  // Strip footnote-style citations [1], [1][2], etc.
+  const clean = text.replace(/(\[\d+\])+/g, "");
+
+  // Split on **bold** markers
+  const segments = clean.split(/\*\*(.*?)\*\*/g);
+
+  const escaped = brandName ? brandName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") : null;
+  const lowerBrand = brandName?.toLowerCase();
+
+  function highlightBrand(str: string, outerKey: number): React.ReactNode {
+    if (!escaped || !str) return <React.Fragment key={outerKey}>{str}</React.Fragment>;
+    const parts = str.split(new RegExp(`(${escaped})`, "gi"));
+    return (
+      <React.Fragment key={outerKey}>
+        {parts.map((p, j) =>
+          p.toLowerCase() === lowerBrand ? (
+            <mark key={j} className="bg-amber-100 text-amber-900 rounded px-0.5 not-italic font-medium">
+              {p}
+            </mark>
+          ) : (
+            <React.Fragment key={j}>{p}</React.Fragment>
+          )
+        )}
+      </React.Fragment>
+    );
+  }
 
   return (
     <>
-      {parts.map((part, i) =>
-        part.toLowerCase() === lowerBrand ? (
-          <mark
-            key={i}
-            className="bg-amber-100 text-amber-900 rounded px-0.5 not-italic font-medium"
-          >
-            {part}
-          </mark>
+      {segments.map((seg, i) =>
+        i % 2 === 1 ? (
+          // Bold segment
+          <strong key={i} className="font-semibold text-[#0D0437]">
+            {seg.replace(/(\[\d+\])+/g, "")}
+          </strong>
         ) : (
-          <span key={i}>{part}</span>
+          highlightBrand(seg, i)
         )
       )}
     </>
   );
 }
+
+/**
+ * Full markdown-to-React renderer. Handles:
+ *   - ### / ## / # headings
+ *   - - and * bullet lists (including indented sub-bullets)
+ *   - **bold** inline, brand highlighting, citation stripping
+ *   - Plain paragraphs
+ */
+function MarkdownBody({ text, brandName }: { text: string; brandName: string }) {
+  const lines = text.split("\n");
+  const elements: React.ReactNode[] = [];
+  let listBuffer: { content: string; indent: number }[] = [];
+  let key = 0;
+
+  function flushList() {
+    if (listBuffer.length === 0) return;
+    elements.push(
+      <ul key={`ul-${key++}`} className="space-y-1 my-0">
+        {listBuffer.map((item, j) => (
+          <li
+            key={j}
+            className="flex gap-2 text-[13px] text-[#374151] leading-[1.75]"
+            style={item.indent > 0 ? { paddingLeft: `${item.indent * 14}px` } : undefined}
+          >
+            <span className="text-[#9CA3AF] shrink-0 select-none mt-[3px] text-[10px]">•</span>
+            <span>{renderInline(item.content, brandName)}</span>
+          </li>
+        ))}
+      </ul>
+    );
+    listBuffer = [];
+  }
+
+  for (const line of lines) {
+    const trimmed = line.trim();
+
+    // Blank line — flush pending list, skip
+    if (!trimmed) {
+      flushList();
+      continue;
+    }
+
+    // Heading: #, ##, ###
+    const headingMatch = trimmed.match(/^(#{1,3})\s+(.+)/);
+    if (headingMatch) {
+      flushList();
+      const level = headingMatch[1].length;
+      const cls =
+        level === 1
+          ? "text-[14px] font-bold text-[#0D0437] tracking-tight"
+          : level === 2
+          ? "text-[13px] font-bold text-[#0D0437]"
+          : "text-[12px] font-semibold text-[#0D0437]";
+      elements.push(
+        <p key={`h-${key++}`} className={cls}>
+          {renderInline(headingMatch[2], brandName)}
+        </p>
+      );
+      continue;
+    }
+
+    // Bullet: optional leading whitespace then - or *
+    const bulletMatch = line.match(/^(\s*)[-*]\s+(.+)/);
+    if (bulletMatch) {
+      listBuffer.push({
+        content: bulletMatch[2],
+        indent: Math.floor(bulletMatch[1].length / 2),
+      });
+      continue;
+    }
+
+    // Paragraph
+    flushList();
+    elements.push(
+      <p key={`p-${key++}`} className="text-[13px] text-[#374151] leading-[1.85]">
+        {renderInline(trimmed, brandName)}
+      </p>
+    );
+  }
+
+  flushList();
+
+  return <div className="space-y-2.5">{elements}</div>;
+}
+
+// ─── Drawer ───────────────────────────────────────────────────────────────────
 
 export function ResponseDrawer({
   queryText,
@@ -117,8 +223,9 @@ export function ResponseDrawer({
     <>
       {/* Dim backdrop */}
       <div
-        className={`fixed inset-0 z-40 bg-black transition-opacity duration-200 ease-out ${isOpen ? "opacity-40" : "opacity-0"
-          }`}
+        className={`fixed inset-0 z-40 bg-black transition-opacity duration-200 ease-out ${
+          isOpen ? "opacity-40" : "opacity-0"
+        }`}
         onClick={handleClose}
         aria-hidden
       />
@@ -152,7 +259,7 @@ export function ResponseDrawer({
                 <ChevronDown className="pointer-events-none absolute right-1.5 top-1/2 -translate-y-1/2 h-3 w-3 opacity-60" />
               </div>
             ) : (
-              /* Single badge — existing behaviour */
+              /* Single badge */
               <span
                 className={`text-[9px] font-bold tracking-[1.5px] uppercase px-2.5 py-1 rounded border ${MODEL_BADGE[selectedModel]}`}
               >
@@ -173,13 +280,10 @@ export function ResponseDrawer({
 
         {/* Query text */}
         <div className="px-6 py-4 bg-[#F4F6F9] border-b border-[#E2E8F0] shrink-0">
-          <p className="text-[9px] font-bold tracking-[2px] uppercase text-[#6B7280] mb-1.5">
-            Query
-          </p>
+          <p className="text-[9px] font-bold tracking-[2px] uppercase text-[#6B7280] mb-1.5">Query</p>
           <p className="text-[14px] font-semibold text-[#0D0437] leading-snug italic">
             &ldquo;{queryText}&rdquo;
           </p>
-          {/* Context badges — echo the sentiment/positioning visible in the activity list */}
           {((mentionSentiment && mentionSentiment !== "not_mentioned") ||
             (brandPositioning && brandPositioning !== "unclear")) && (
             <div className="flex items-center gap-1.5 mt-2 flex-wrap">
@@ -197,11 +301,9 @@ export function ResponseDrawer({
           )}
         </div>
 
-        {/* Raw response — scrollable */}
+        {/* Response — scrollable */}
         <div className="flex-1 overflow-y-auto px-6 py-5 min-h-0">
-          <p className="text-[9px] font-bold tracking-[2px] uppercase text-[#6B7280] mb-3">
-            Response
-          </p>
+          <p className="text-[9px] font-bold tracking-[2px] uppercase text-[#6B7280] mb-4">Response</p>
 
           {activeRun?.rawResponse === null ? (
             <div className="space-y-2.5 animate-pulse">
@@ -215,9 +317,7 @@ export function ResponseDrawer({
           ) : activeRun?.rawResponse?.trim() === "" ? (
             <p className="text-[13px] text-[#6B7280] italic">No response recorded for this run.</p>
           ) : (
-            <p className="text-[13px] text-[#1A1A2E] leading-[1.85] whitespace-pre-wrap">
-              <HighlightedResponse text={activeRun?.rawResponse ?? ""} brandName={brandName} />
-            </p>
+            <MarkdownBody text={activeRun?.rawResponse ?? ""} brandName={brandName} />
           )}
         </div>
 

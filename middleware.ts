@@ -50,7 +50,7 @@ export async function middleware(request: NextRequest) {
   if (user && isAuthRoute) {
     // Redirect authenticated users away from auth pages
     const url = request.nextUrl.clone();
-    url.pathname = "/discover";
+    url.pathname = "/dashboard/overview";
     return NextResponse.redirect(url);
   }
 

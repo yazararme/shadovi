@@ -243,7 +243,7 @@ export async function runTrackingForClient(
   // ── 2. Fetch active queries (include fact_id, is_bait for scoring logic) ──
   const { data: queries } = await supabase
     .from("queries")
-    .select("id, text, intent, fact_id, is_bait")
+    .select("id, text, intent, fact_id, is_bait, version_id")
     .eq("client_id", clientId)
     .eq("status", "active");
 
@@ -290,7 +290,7 @@ export async function runTrackingForClient(
       const modelMissed: string[] = [];
       const modelCompetitorCounts: Record<string, number> = {};
 
-      for (const query of queries as Pick<Query, "id" | "text" | "intent" | "fact_id" | "is_bait">[]) {
+      for (const query of queries as Pick<Query, "id" | "text" | "intent" | "fact_id" | "is_bait" | "version_id">[]) {
         // Perplexity sonar-pro has a tight rate limit. A brief pause between serial
         // queries prevents the burst from exhausting the limit and dropping queries.
         if (model === "perplexity") {
@@ -346,6 +346,9 @@ export async function runTrackingForClient(
             // Denormalised fields stamped at insert time to avoid joins in downstream queries
             query_intent: query.intent,
             citation_present: perplexityCitations.length > 0 || (Array.isArray(scored.cited_sources) && scored.cited_sources.length > 0),
+            // version_id links this run to the portfolio snapshot it was generated against.
+            // null for pre-versioning clients until they next regenerate.
+            version_id: query.version_id,
           })
           .select()
           .single();
@@ -385,6 +388,7 @@ export async function runTrackingForClient(
                   scorer_model: ks.scorer_model,
                   bait_triggered,
                   brand_positioning: ks.brand_positioning,
+                  version_id: query.version_id,
                 });
                 if (ksInsertError) {
                   console.error(
@@ -463,10 +467,10 @@ export async function runTrackingForClient(
           }
 
           // ── Competitive mention extraction (Haiku) ────────────────────────
-          // Runs on problem_aware and category queries only — the two intents where
-          // brands appear organically. Validation/comparative are excluded by design
-          // (validation is Beko-framed, comparative prompts name brands explicitly).
-          if ((query.intent === "problem_aware" || query.intent === "category") && insertedRun) {
+          // Runs on problem_aware, category, and comparative — all three intents where
+          // organic brand mentions are meaningful. Validation is still excluded
+          // (Beko-framed prompts; competitors are named explicitly, not discovered).
+          if ((query.intent === "problem_aware" || query.intent === "category" || query.intent === "comparative") && insertedRun) {
             try {
               const extractionPrompt = buildExtractionPrompt(query.text, rawResponse);
               const extractionRaw = await withTimeout(

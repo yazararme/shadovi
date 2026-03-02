@@ -13,6 +13,7 @@ import type {
   BrandKnowledgeScore,
   BrandFactCategory,
 } from "@/types";
+import { computeBVI, bviColor } from "@/lib/bvi/compute-bvi";
 
 // A score row joined with its related fact and run data for display
 interface EnrichedScore extends BrandKnowledgeScore {
@@ -229,23 +230,41 @@ function BrandKnowledgeInner() {
     setClient(activeClient);
 
     if (activeClient) {
+      // Fetch active version first (lightweight) so we can scope queries to the
+      // current portfolio snapshot. Null = pre-versioning client, show all data.
+      const { data: versionRow } = await supabase
+        .from("portfolio_versions")
+        .select("id")
+        .eq("client_id", activeClient.id)
+        .eq("is_active", true)
+        .limit(1)
+        .single();
+      const activeVersionId = (versionRow as { id?: string } | null)?.id ?? null;
+
+      // Build queries conditionally — version filter applied when version exists
+      let scoresQ = supabase
+        .from("brand_knowledge_scores")
+        .select("*")
+        .eq("client_id", activeClient.id)
+        .order("scored_at", { ascending: false })
+        .limit(5000);
+      if (activeVersionId) scoresQ = scoresQ.eq("version_id", activeVersionId);
+
+      let runsQ = supabase
+        .from("tracking_runs")
+        .select("id, query_id, model, raw_response")
+        .eq("client_id", activeClient.id)
+        .limit(10000);
+      if (activeVersionId) runsQ = runsQ.eq("version_id", activeVersionId);
+
       const [{ data: rawScores }, { data: facts }, { data: runs }, { data: queries }] =
         await Promise.all([
-          supabase
-            .from("brand_knowledge_scores")
-            .select("*")
-            .eq("client_id", activeClient.id)
-            .order("scored_at", { ascending: false })
-            .limit(5000),
+          scoresQ,
           supabase
             .from("brand_facts")
             .select("*")
             .eq("client_id", activeClient.id),
-          supabase
-            .from("tracking_runs")
-            .select("id, query_id, model, raw_response")
-            .eq("client_id", activeClient.id)
-            .limit(10000),
+          runsQ,
           supabase
             .from("queries")
             .select("id, text")
@@ -357,6 +376,18 @@ function BrandKnowledgeInner() {
     return { model, total: modelScores.length, correct: modelCorrect, rate };
   }).filter((m) => m.total > 0);
 
+  // BVI computation — uses enriched scores (fact_is_true, bait_triggered, model all present)
+  const bviResult = computeBVI(
+    scores.map((s) => ({
+      fact_id: s.fact_id,
+      fact_is_true: s.fact_is_true,
+      fact_claim: s.fact_claim,
+      bait_triggered: s.bait_triggered,
+      model: s.model,
+    })),
+    trackedModels
+  );
+
   const brandName = client.brand_dna?.brand_name ?? client.brand_name ?? client.url;
 
   return (
@@ -419,6 +450,103 @@ function BrandKnowledgeInner() {
             {trackedModels.length !== 1 ? "s" : ""}
           </p>
         </div>
+      </div>
+
+      {/* Brand Vulnerability Index panel */}
+      <SubLabel>Brand Vulnerability Index</SubLabel>
+      <div className="grid grid-cols-2 sm:grid-cols-5 gap-4 mb-6">
+
+        {/* Composite BVI Score */}
+        <div className="border border-[#E2E8F0] rounded-lg p-5 bg-white">
+          <p className="text-[9px] font-bold tracking-[2px] uppercase text-[#6B7280] mb-2">BVI Score</p>
+          {bviResult.composite !== null ? (
+            <>
+              <p className="text-[36px] font-bold leading-none" style={{ color: bviColor(bviResult.composite) }}>
+                {bviResult.composite}
+              </p>
+              <div className="mt-3 h-[5px] w-full bg-[#E2E8F0] rounded-full overflow-hidden">
+                <div
+                  className="h-full rounded-full transition-all"
+                  style={{ width: `${bviResult.composite}%`, backgroundColor: bviColor(bviResult.composite) }}
+                />
+              </div>
+            </>
+          ) : (
+            <p className="text-[36px] font-bold text-[#9CA3AF] leading-none">—</p>
+          )}
+          <p className="text-[11px] text-[#6B7280] mt-2">
+            Lower is better — measures how easily LLMs confirm false claims about your brand
+          </p>
+          <button
+            onClick={() => document.getElementById("bvi-alerts")?.scrollIntoView({ behavior: "smooth" })}
+            className="flex items-center gap-0.5 text-[9px] font-bold uppercase tracking-wide text-[#9CA3AF] hover:text-[#0D0437] mt-2 transition-colors w-fit"
+          >
+            View details →
+          </button>
+        </div>
+
+        {/* Frequency */}
+        <div className="border border-[#E2E8F0] rounded-lg p-5 bg-white">
+          <p className="text-[9px] font-bold tracking-[2px] uppercase text-[#6B7280] mb-2">Bait Trigger Rate</p>
+          {bviResult.frequency !== null ? (
+            <>
+              <p className="text-[36px] font-bold leading-none" style={{ color: bviColor(bviResult.frequency) }}>
+                {bviResult.frequency}%
+              </p>
+              <div className="mt-3 h-[5px] w-full bg-[#E2E8F0] rounded-full overflow-hidden">
+                <div
+                  className="h-full rounded-full transition-all"
+                  style={{ width: `${bviResult.frequency}%`, backgroundColor: bviColor(bviResult.frequency) }}
+                />
+              </div>
+            </>
+          ) : (
+            <p className="text-[36px] font-bold text-[#9CA3AF] leading-none">—</p>
+          )}
+          <p className="text-[11px] text-[#6B7280] mt-2">
+            {bviResult.baitRunsTotal > 0
+              ? `${bviResult.baitTriggeredCount} of ${bviResult.baitRunsTotal} bait queries triggered a hallucination`
+              : "No bait queries found"}
+          </p>
+        </div>
+
+        {/* Replication */}
+        <div className="border border-[#E2E8F0] rounded-lg p-5 bg-white">
+          <p className="text-[9px] font-bold tracking-[2px] uppercase text-[#6B7280] mb-2">Cross-Model Spread</p>
+          {bviResult.replication !== null ? (
+            <>
+              <p className="text-[36px] font-bold leading-none" style={{ color: bviColor(bviResult.replication) }}>
+                {bviResult.replication}%
+              </p>
+              <div className="mt-3 h-[5px] w-full bg-[#E2E8F0] rounded-full overflow-hidden">
+                <div
+                  className="h-full rounded-full transition-all"
+                  style={{ width: `${bviResult.replication}%`, backgroundColor: bviColor(bviResult.replication) }}
+                />
+              </div>
+            </>
+          ) : (
+            <p className="text-[36px] font-bold text-[#9CA3AF] leading-none">—</p>
+          )}
+          <p className="text-[11px] text-[#6B7280] mt-2">
+            Average % of models that confirm the same false claim
+          </p>
+        </div>
+
+        {/* Severity — future, greyed out */}
+        <div className="border border-[#E2E8F0] rounded-lg p-5 bg-white opacity-50">
+          <p className="text-[9px] font-bold tracking-[2px] uppercase text-[#6B7280] mb-2">Severity</p>
+          <p className="text-[36px] font-bold text-[#9CA3AF] leading-none">—</p>
+          <p className="text-[11px] text-[#6B7280] mt-2">Configure fact severity ratings to enable</p>
+        </div>
+
+        {/* Persistence — future, greyed out */}
+        <div className="border border-[#E2E8F0] rounded-lg p-5 bg-white opacity-50">
+          <p className="text-[9px] font-bold tracking-[2px] uppercase text-[#6B7280] mb-2">Persistence</p>
+          <p className="text-[36px] font-bold text-[#9CA3AF] leading-none">—</p>
+          <p className="text-[11px] text-[#6B7280] mt-2">Available after 30 days of tracking</p>
+        </div>
+
       </div>
 
       {/* Accuracy by Category */}
@@ -521,9 +649,60 @@ function BrandKnowledgeInner() {
         </table>
       </div>
 
+      {/* BVI by model */}
+      <SubLabel>Vulnerability by Model</SubLabel>
+      <div className="border border-[#E2E8F0] rounded-lg overflow-hidden bg-white mb-6">
+        <table className="w-full">
+          <thead>
+            <tr className="border-b bg-[#F4F6F9]">
+              {["Model", "Bait Runs", "Triggered", "Trigger Rate", "Unique Facts Triggered"].map((h) => (
+                <th key={h} className="text-left px-4 py-3 text-[8px] font-bold tracking-[2px] uppercase text-[#6B7280]">
+                  {h}
+                </th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {trackedModels.filter((model) => (bviResult.perModel[model]?.baitRuns ?? 0) > 0).map((model) => {
+              const stats = bviResult.perModel[model];
+              return (
+                <tr key={model} className="border-b last:border-0">
+                  <td className="px-4 py-3 font-bold text-[13px] text-[#0D0437]">{MODEL_LABELS[model] ?? model}</td>
+                  <td className="px-4 py-3 font-mono text-[12px] text-[#6B7280]">{stats.baitRuns}</td>
+                  <td className="px-4 py-3 font-mono text-[12px] text-[#FF4B6E]">{stats.triggered}</td>
+                  <td className="px-4 py-3">
+                    <span
+                      className="text-[11px] font-bold px-2 py-0.5 rounded border"
+                      style={{
+                        color: bviColor(stats.triggerRate),
+                        backgroundColor: `${bviColor(stats.triggerRate)}18`,
+                        borderColor: `${bviColor(stats.triggerRate)}33`,
+                      }}
+                    >
+                      {stats.triggerRate}%
+                    </span>
+                  </td>
+                  <td className="px-4 py-3 font-mono text-[12px] text-[#6B7280]">
+                    {stats.uniqueFactsTriggered} of {stats.totalBaitFacts}
+                  </td>
+                </tr>
+              );
+            })}
+            {trackedModels.every((m) => (bviResult.perModel[m]?.baitRuns ?? 0) === 0) && (
+              <tr>
+                <td colSpan={5} className="px-4 py-4 text-center text-[12px] text-[#9CA3AF]">
+                  No bait query data yet — add false claim tests in Brand Facts to enable
+                </td>
+              </tr>
+            )}
+          </tbody>
+        </table>
+      </div>
+
       {/* Hallucination Alerts — 3-level: Category → Fact → LLM → Variants */}
       {alertGroups.length > 0 && (
         <>
+          <div id="bvi-alerts" />
           <SubLabel>Hallucination Alerts</SubLabel>
           <div className="space-y-8 mb-6">
             {categoryTree.map((catGroup) => (

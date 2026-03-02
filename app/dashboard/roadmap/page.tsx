@@ -157,7 +157,7 @@ function RoadmapInner() {
   // ── Loading ──────────────────────────────────────────────────────────────
   if (loading) {
     return (
-      <div className="p-8 max-w-5xl mx-auto space-y-6">
+      <div className="p-8 max-w-[1000px] mx-auto space-y-6">
         <div>
           <Skeleton className="h-8 w-48 mb-2" />
           <Skeleton className="h-4 w-64" />
@@ -176,7 +176,7 @@ function RoadmapInner() {
 
   if (!client) {
     return (
-      <div className="p-8 max-w-5xl mx-auto">
+      <div className="p-8 max-w-[1000px] mx-auto">
         <h1 className="text-[28px] font-bold text-[#0D0437]">AEO Roadmap</h1>
         <p className="text-sm text-[#6B7280] mt-2">No active client.</p>
       </div>
@@ -192,7 +192,7 @@ function RoadmapInner() {
   // ── Empty state ──────────────────────────────────────────────────────────
   if (recs.length === 0) {
     return (
-      <div className="p-8 max-w-5xl mx-auto">
+      <div className="p-8 max-w-[1000px] mx-auto">
         <div className="mb-8">
           <h1 className="text-[28px] font-bold text-[#0D0437] tracking-tight leading-tight">
             AEO Roadmap
@@ -213,7 +213,7 @@ function RoadmapInner() {
 
   // ── Main render ──────────────────────────────────────────────────────────
   return (
-    <div className="p-8 max-w-5xl mx-auto">
+    <div className="p-8 max-w-[1000px] mx-auto">
       {/* Header */}
       <div className="mb-0.5">
         <h1 className="text-[28px] font-bold text-[#0D0437] tracking-tight leading-tight">

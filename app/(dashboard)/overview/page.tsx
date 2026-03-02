@@ -20,6 +20,7 @@ import { toast } from "sonner";
 import { RefreshCw, AlertTriangle, ExternalLink, ChevronRight, CheckCircle2, XCircle } from "lucide-react";
 import Link from "next/link";
 import type { Client, TrackingRun, Recommendation, LLMModel } from "@/types";
+import { computeBVI, type BVIScoreInput } from "@/lib/bvi/compute-bvi";
 
 const MODEL_LABELS: Record<LLMModel, string> = {
   "gpt-4o": "GPT-4o",
@@ -92,7 +93,7 @@ const INTENT_BADGE: Record<string, string> = {
 
 const SENTIMENT_BADGE: Record<string, string> = {
   positive: "bg-[rgba(26,143,92,0.08)] text-[#1A8F5C] border-[rgba(26,143,92,0.2)]",
-  neutral:  "bg-[#F4F6F9] text-[#6B7280] border-[#E2E8F0]",
+  neutral: "bg-[#F4F6F9] text-[#6B7280] border-[#E2E8F0]",
   negative: "bg-[rgba(255,75,110,0.08)] text-[#FF4B6E] border-[rgba(255,75,110,0.2)]",
 };
 
@@ -137,6 +138,8 @@ function OverviewInner() {
   const [drawer, setDrawer] = useState<DrawerState | null>(null);
   const [factAccuracyPct, setFactAccuracyPct] = useState<number | null>(null);
   const [factAccuracyCount, setFactAccuracyCount] = useState(0);
+  const [bviComposite, setBviComposite] = useState<number | null>(null);
+  const [bviBaitRunsTotal, setBviBaitRunsTotal] = useState(0);
 
   useEffect(() => {
     loadData();
@@ -157,7 +160,7 @@ function OverviewInner() {
     setClient(activeClient);
 
     if (activeClient) {
-      const [{ data: runData }, { data: recData }, { data: queryData }, { data: knowledgeData }] = await Promise.all([
+      const [{ data: runData }, { data: recData }, { data: queryData }, { data: knowledgeData }, { data: factsData }] = await Promise.all([
         supabase
           .from("tracking_runs")
           .select("*")
@@ -177,7 +180,11 @@ function OverviewInner() {
           .eq("client_id", activeClient.id),
         supabase
           .from("brand_knowledge_scores")
-          .select("accuracy")
+          .select("accuracy, fact_id, bait_triggered, tracking_run_id")
+          .eq("client_id", activeClient.id),
+        supabase
+          .from("brand_facts")
+          .select("id, is_true, claim")
           .eq("client_id", activeClient.id),
       ]);
       setRuns(runData ?? []);
@@ -200,6 +207,35 @@ function OverviewInner() {
       const kCorrect = kRows.filter((r: { accuracy: string }) => r.accuracy === "correct").length;
       setFactAccuracyPct(kTotal > 0 ? Math.round((kCorrect / kTotal) * 100) : null);
       setFactAccuracyCount(kTotal);
+
+      // BVI computation for the overview card
+      // Build lookup maps to join scores → model (via tracking_run) and fact_is_true (via brand_facts)
+      const factLookup = new Map<string, { is_true: boolean; claim: string }>();
+      (factsData ?? []).forEach((f: { id: string; is_true: boolean; claim: string }) =>
+        factLookup.set(f.id, { is_true: f.is_true, claim: f.claim })
+      );
+      const runModelLookup = new Map<string, LLMModel>();
+      (runData ?? []).forEach((r: TrackingRun) => runModelLookup.set(r.id, r.model));
+
+      const bviInputs = (kRows as { accuracy: string; fact_id: string | null; bait_triggered: boolean; tracking_run_id: string }[])
+        .map((s): BVIScoreInput | null => {
+          if (!s.fact_id) return null;
+          const fact = factLookup.get(s.fact_id);
+          const model = runModelLookup.get(s.tracking_run_id);
+          if (!fact || !model) return null;
+          return {
+            fact_id: s.fact_id,
+            fact_is_true: fact.is_true,
+            fact_claim: fact.claim,
+            bait_triggered: s.bait_triggered,
+            model,
+          };
+        })
+        .filter((x): x is BVIScoreInput => x !== null);
+
+      const bviResult = computeBVI(bviInputs, (activeClient.selected_models ?? []) as string[]);
+      setBviComposite(bviResult.composite);
+      setBviBaitRunsTotal(bviResult.baitRunsTotal);
     }
     setLoading(false);
   }
@@ -230,8 +266,8 @@ function OverviewInner() {
     return (
       <div className="space-y-6">
         <h1 className="font-serif text-[32px] font-semibold text-[#0D0437] tracking-tight">Overview</h1>
-        <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
-          {[0, 1, 2, 3].map((i) => (
+        <div className="grid grid-cols-2 sm:grid-cols-5 gap-4">
+          {[0, 1, 2, 3, 4].map((i) => (
             <div key={i} className="border border-[#E2E8F0] rounded-lg p-5 space-y-3 bg-white">
               <Skeleton className="h-3 w-24" />
               <Skeleton className="h-8 w-16" />
@@ -483,7 +519,7 @@ function OverviewInner() {
 
       {/* ── 3. Visibility Metrics strip ───────────────────────────────────────── */}
       <SubLabel>Visibility Metrics</SubLabel>
-      <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 mb-6">
+      <div className="grid grid-cols-2 sm:grid-cols-5 gap-4 mb-6">
         <InsightMetric
           label="LLM Mention Rate"
           value={`${mentionRate}%`}
@@ -513,6 +549,33 @@ function OverviewInner() {
           insight={citationInsight}
           sentiment={citationPct >= 40 ? "positive" : citationPct >= 20 ? "neutral" : "negative"}
           navLink={{ href: `/sources?client=${client.id}`, label: "View source intelligence" }}
+        />
+        {/* BVI — inverted colour logic: lower score = better = green */}
+        <InsightMetric
+          label="Brand Vulnerability"
+          value={bviBaitRunsTotal > 0 && bviComposite !== null ? `${bviComposite}` : "—"}
+          insight={
+            bviBaitRunsTotal === 0
+              ? "Add false claim tests in Brand Facts to enable."
+              : bviComposite !== null && bviComposite <= 15
+                ? `Low vulnerability — LLMs rarely confirm false claims about your brand.`
+                : bviComposite !== null && bviComposite <= 40
+                  ? `Moderate vulnerability — some false claims confirmed across models.`
+                  : `High vulnerability — LLMs frequently confirm false claims about your brand.`
+          }
+          sentiment={
+            bviBaitRunsTotal === 0
+              ? "neutral"
+              : bviComposite !== null && bviComposite <= 15
+                ? "positive"
+                : bviComposite !== null && bviComposite <= 40
+                  ? "neutral"
+                  : "negative"
+          }
+          meta={bviBaitRunsTotal > 0 && bviComposite !== null
+            ? `score 0–100 · lower is better`
+            : undefined}
+          navLink={{ href: `/knowledge?client=${client.id}`, label: "View vulnerability details" }}
         />
       </div>
 

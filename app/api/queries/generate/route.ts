@@ -1,7 +1,8 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { generateQueries } from "@/lib/synthetic-buyer/query-generator";
-import type { ClientContext, BrandFact } from "@/types";
+import { createPortfolioVersion } from "@/lib/versioning/create-version";
+import type { ClientContext, BrandFact, VersionTrigger } from "@/types";
 
 export async function POST(request: Request) {
   try {
@@ -9,7 +10,7 @@ export async function POST(request: Request) {
     const { data: { user } } = await supabase.auth.getUser();
     if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
-    const { clientId } = await request.json() as { clientId: string };
+    const { clientId, trigger = "manual_regeneration" } = await request.json() as { clientId: string; trigger?: VersionTrigger };
     if (!clientId) return NextResponse.json({ error: "clientId required" }, { status: 400 });
 
     // Fetch full client context + brand facts for anchoring validation queries
@@ -39,17 +40,35 @@ export async function POST(request: Request) {
     const brandFacts = (factsRes.data ?? []) as BrandFact[];
     const queries = await generateQueries(ctx, brandFacts.length > 0 ? brandFacts : undefined);
 
-    // Wipe ALL queries for this client on regenerate — any status, no exceptions.
-    // Filtering by status left paused/removed rows behind and caused stacking.
+    // Create a new portfolio version — deactivates the previous one and returns a fresh versionId.
+    // Must happen before inserting new queries so they can be stamped with the new version.
+    const { versionId } = await createPortfolioVersion(clientId, trigger, supabase);
+
+    // Soft-deactivate existing queries rather than hard-deleting them.
+    // Historical tracking_runs still reference these query rows via query_id, so hard
+    // deletion would orphan them. Soft-delete preserves the historical data chain.
     await supabase
       .from("queries")
-      .delete()
-      .eq("client_id", clientId);
+      .update({
+        status:                "inactive",
+        deactivated_at:        new Date().toISOString(),
+        deactivated_by_version: versionId,
+      })
+      .eq("client_id", clientId)
+      .in("status", ["pending_approval", "active"]);
 
     const { data: inserted, error: insertError } = await supabase
       .from("queries")
-      .insert(queries.map((q) => ({ ...q, client_id: clientId, status: "pending_approval" })))
+      .insert(queries.map((q) => ({ ...q, client_id: clientId, status: "pending_approval", version_id: versionId })))
       .select();
+
+    // Update the version row with the accurate post-insert query count
+    if (inserted?.length) {
+      await supabase
+        .from("portfolio_versions")
+        .update({ query_count: inserted.length })
+        .eq("id", versionId);
+    }
 
     if (insertError) throw new Error(`DB insert error: ${insertError.message}`);
 

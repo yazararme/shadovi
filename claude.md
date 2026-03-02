@@ -35,3 +35,12 @@ Whenever i put SAO in the prompt, it means i want a short answer only - it is a 
 
 ## Learned Rules
 <!-- Claude appends corrections here over time -->
+
+## Portfolio Versioning (March 2026)
+Portfolio versioning is being implemented via migration 010. See kk_temp_docs/cc_prompt_portfolio_versioning.md for the full spec. Core concept: every query regeneration creates a new portfolio_versions row. Queries are soft-deleted (status='inactive') not hard-deleted. All tracking_runs and brand_knowledge_scores inherit version_id from the query they ran against. Dashboard queries filter by the active version.
+
+## BVI Composite Score (March 2026)
+BVI score = (Frequency × 0.6) + (Replication × 0.4), range 0–100, lower is better. 
+Computed in lib/bvi/compute-bvi.ts — pure function, no DB calls. Surfaces on Brand Knowledge 
+page as a 5-card panel and on Overview as a single card. Severity and Persistence greyed out 
+pending future features. INVERTED colour logic: low = green, high = coral.

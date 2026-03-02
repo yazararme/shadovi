@@ -19,6 +19,7 @@ import {
   Settings,
 } from "lucide-react";
 import type { Client } from "@/types";
+import { useActiveVersion } from "@/hooks/useActiveVersion";
 
 const navItems = [
   { href: "/overview", label: "Overview", icon: BarChart2 },
@@ -42,6 +43,8 @@ function SidebarInner({ onSignOut }: { onSignOut: () => void }) {
   const currentClientId = searchParams.get("client");
   const currentClient =
     clients.find((c) => c.id === currentClientId) ?? clients[0] ?? null;
+
+  const { activeVersion } = useActiveVersion(currentClient?.id);
 
   // Append ?client=ID to every nav link so the selection persists across pages
   const clientParam = currentClient ? `?client=${currentClient.id}` : "";
@@ -153,6 +156,20 @@ function SidebarInner({ onSignOut }: { onSignOut: () => void }) {
           Settings
         </Link>
       </div>
+
+      {/* Portfolio version indicator — non-interactive; shows current version and activation date */}
+      {activeVersion && (
+        <div className="px-3 py-2 mb-1">
+          <p className="text-[10px] text-white/30 leading-tight">
+            Portfolio v{activeVersion.version_number} · since{" "}
+            {new Date(activeVersion.created_at).toLocaleDateString("en-GB", {
+              day: "numeric",
+              month: "short",
+              year: "numeric",
+            })}
+          </p>
+        </div>
+      )}
 
       {/* Sign out */}
       <button

@@ -7,7 +7,7 @@ import { cn } from "@/lib/utils";
 import { createClient } from "@/lib/supabase/client";
 import {
   ChevronDown, ChevronRight, LogOut,
-  Map, LayoutDashboard, Signal, Brain, Globe, Activity, Settings,
+  Map, LayoutDashboard, Signal, AudioWaveform, Brain, Globe, Activity, Settings,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import { useClientContext } from "@/context/ClientContext";
@@ -32,6 +32,7 @@ const NAV_GROUPS: {
     items: [
       { href: "/dashboard/overview",        label: "Overview",          Icon: LayoutDashboard },
       { href: "/dashboard/share-of-voice",  label: "AI Share of Voice", Icon: Signal },
+      { href: "/dashboard/tone-of-voice",   label: "AI Tone of Voice",  Icon: AudioWaveform },
     ],
   },
   {
@@ -178,7 +179,7 @@ function SidebarInner({ onSignOut }: { onSignOut: () => void }) {
           return (
             <div key={label} className={groupIdx === 0 ? "mt-2" : "mt-5"}>
               {/* Section label — structural, not navigational */}
-              <p className="px-4 mb-1.5 text-[10px] font-medium uppercase tracking-[0.12em] text-white/45 select-none">
+              <p className="px-4 mb-1.5 text-[11px] font-medium uppercase tracking-[0.12em] text-white/45 select-none">
                 {label}
               </p>
 
@@ -202,7 +203,7 @@ function SidebarInner({ onSignOut }: { onSignOut: () => void }) {
                         <Link
                           href={`${href}${clientParam}`}
                           className={cn(
-                            "flex items-center gap-2.5 py-1.5 pl-4 pr-3 text-[13px] transition-colors duration-[120ms]",
+                            "flex items-center gap-2.5 py-2 pl-4 pr-3 text-[13px] transition-colors duration-[120ms]",
                             active
                               ? "bg-white/8 text-white"
                               : "text-white/55 hover:bg-white/5 hover:text-white/80"
@@ -286,7 +287,7 @@ export function DashboardSidebar() {
   }
 
   return (
-    <aside className="flex h-screen w-56 flex-col bg-[#0F1623] py-4 print:hidden shrink-0">
+    <aside className="flex h-screen w-[210px] flex-col bg-[#0F1623] py-4 print:hidden shrink-0">
       {/* Logo lockup */}
       <div className="px-5 pt-1 pb-3">
         <span className="font-exo2 font-black text-[22px] leading-none tracking-tight text-white">

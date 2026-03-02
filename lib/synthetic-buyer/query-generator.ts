@@ -245,7 +245,7 @@ export async function calibrateQueries(
   brandFacts: BrandFact[],
   instruction: string,
   intents: QueryIntent[]
-): Promise<Omit<Query, "id" | "client_id" | "created_at" | "status">[]> {
+): Promise<Omit<Query, "id" | "client_id" | "created_at" | "status" | "version_id">[]> {
   const factLookup = new Map<string, BrandFact>();
   brandFacts.forEach((f) => factLookup.set(f.id, f));
 
@@ -360,7 +360,7 @@ export async function calibrateQueries(
 export async function generateQueries(
   ctx: ClientContext,
   brandFacts?: BrandFact[]
-): Promise<Omit<Query, "id" | "client_id" | "created_at" | "status">[]> {
+): Promise<Omit<Query, "id" | "client_id" | "created_at" | "status" | "version_id">[]> {
   // Build a fact lookup so we can derive is_bait from the source fact at generation time.
   // This is more reliable than asking the LLM to classify bait — the LLM doesn't know
   // which facts are bait, and keyword inference of bait_type is too fragile.
