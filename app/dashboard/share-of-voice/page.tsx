@@ -9,6 +9,9 @@ import { ResponseDrawer, type RunOption } from "@/components/dashboard/ResponseD
 import { Skeleton } from "@/components/ui/skeleton";
 import { ChevronDown, ChevronUp } from "lucide-react";
 import Link from "next/link";
+import {
+  LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid,
+} from "recharts";
 import type {
   Client, TrackingRun, Competitor, LLMModel, QueryIntent, GapCluster, Recommendation,
 } from "@/types";
@@ -34,11 +37,30 @@ const MODEL_PILL: Record<LLMModel, string> = {
 const INTENT_FILTER_OPTIONS: { value: QueryIntent | "all"; label: string }[] = [
   { value: "all",           label: "All" },
   { value: "problem_aware", label: "Problem-Aware" },
-  { value: "category",      label: "Category Search" },
+  { value: "category",      label: "Category" },
+];
+
+const DATE_OPTIONS: { value: "7d" | "30d" | "all"; label: string }[] = [
+  { value: "7d",  label: "Last 7 days" },
+  { value: "30d", label: "Last 30 days" },
+  { value: "all", label: "All time" },
 ];
 
 // Non-validation intents used for share-of-voice analysis
 const SOV_INTENTS: QueryIntent[] = ["problem_aware", "category", "comparative"];
+
+// Coral for own brand (matches heatmap brand-row border); then a distinct palette for competitors
+const ENTITY_COLORS = [
+  "#FF6B6B", // own brand
+  "#10a37f", "#4285f4", "#f59e0b", "#7B5EA7",
+  "#00B4D8", "#6366f1", "#d4a27e", "#e11d48",
+];
+
+/** Format "YYYY-MM-DD" → "27 Feb" using UTC to avoid timezone shifts */
+function formatTrendDate(ymd: string): string {
+  const d = new Date(ymd + "T00:00:00Z");
+  return d.toLocaleDateString("en-GB", { day: "numeric", month: "short", timeZone: "UTC" });
+}
 
 // ── Helpers ────────────────────────────────────────────────────────────────────
 
@@ -102,6 +124,13 @@ function SectionLabel({ children, count }: { children: React.ReactNode; count?: 
       <div className="flex-1 h-px bg-[#E2E8F0]" />
     </div>
   );
+}
+
+function VelocityBadge({ dir, pct }: { dir: "up" | "down" | "same"; pct: number }) {
+  if (dir === "same") return <span className="text-[11px] text-[#9CA3AF]">—</span>;
+  if (dir === "up")
+    return <span className="text-[10px] font-bold text-[#FF4B6E] whitespace-nowrap">↑ {pct}%</span>;
+  return <span className="text-[10px] font-bold text-[#1A8F5C] whitespace-nowrap">↓ {pct}%</span>;
 }
 
 function ClusterCard({
@@ -217,8 +246,12 @@ function ShareOfVoiceInner() {
   // "query_id:model" confirmed by rbm as is_tracked_brand=true
   const [brandQMSet, setBrandQMSet] = useState<Set<string>>(new Set());
 
-  // UI
+  // UI — filter bar
+  const [dateRange, setDateRange] = useState<"7d" | "30d" | "all">("all");
   const [intentFilter, setIntentFilter] = useState<QueryIntent | "all">("all");
+  // null = all models selected; Set = explicit selection
+  const [selectedModels, setSelectedModels] = useState<Set<LLMModel> | null>(null);
+
   const [activeClusterId, setActiveClusterId] = useState<string | null>(null);
   const [drawer, setDrawer] = useState<DrawerState | null>(null);
 
@@ -333,7 +366,7 @@ function ShareOfVoiceInner() {
 
   if (loading) {
     return (
-      <div className="p-8 max-w-5xl mx-auto space-y-6">
+      <div className="p-8 max-w-[1000px] mx-auto space-y-6">
         <Skeleton className="h-8 w-48" />
         <Skeleton className="h-56 w-full rounded-xl" />
         <Skeleton className="h-48 w-full rounded-xl" />
@@ -346,7 +379,7 @@ function ShareOfVoiceInner() {
 
   if (!client) {
     return (
-      <div className="p-8 max-w-5xl mx-auto">
+      <div className="p-8 max-w-[1000px] mx-auto">
         <h1 className="text-2xl font-bold text-[#0D0437] mb-2">AI Share of Voice</h1>
         <p className="text-sm text-[#6B7280]">No active client found.</p>
       </div>
@@ -355,7 +388,7 @@ function ShareOfVoiceInner() {
 
   if (runs.length < 10) {
     return (
-      <div className="p-8 max-w-5xl mx-auto">
+      <div className="p-8 max-w-[1000px] mx-auto">
         <h1 className="text-[28px] font-bold text-[#0D0437] mb-1">AI Share of Voice</h1>
         <p className="text-[12px] text-[#9CA3AF] font-mono mb-6">{client.brand_name ?? client.url}</p>
         <div className="border border-[#E2E8F0] rounded-xl p-8 bg-white text-center">
@@ -366,18 +399,51 @@ function ShareOfVoiceInner() {
     );
   }
 
-  // ── Derived: heatmap ───────────────────────────────────────────────────────
+  // ── Derived: filter bar ────────────────────────────────────────────────────
 
   const brandName = client.brand_dna?.brand_name ?? client.brand_name ?? "Your Brand";
   const trackedModels = (client.selected_models ?? []) as LLMModel[];
 
+  // Models that actually have run data (used to populate model pills)
+  const availableModels = trackedModels.filter((m) => runs.some((r) => r.model === m));
+
+  // Effective model set: null state = all available
+  const effectiveModelSet: Set<LLMModel> = selectedModels ?? new Set(availableModels);
+
+  // Date cutoff — ISO string "YYYY-MM-DD", null = no cutoff
+  const dateThreshold: string | null =
+    dateRange === "7d"  ? new Date(Date.now() - 7  * 86_400_000).toISOString().slice(0, 10) :
+    dateRange === "30d" ? new Date(Date.now() - 30 * 86_400_000).toISOString().slice(0, 10) :
+    null;
+
+  // Base runs: apply date + model filter before any section-specific logic
+  const baseRuns = runs.filter((r) => {
+    if (dateThreshold && r.ran_at.slice(0, 10) < dateThreshold) return false;
+    if (!effectiveModelSet.has(r.model as LLMModel)) return false;
+    return true;
+  });
+
+  // Columns shown in heatmap (respects model selection)
+  const filteredModels = trackedModels.filter((m) => effectiveModelSet.has(m));
+
+  // Toggle a single model pill — reset to null (all) if all re-selected
+  function toggleModel(model: LLMModel) {
+    setSelectedModels((prev) => {
+      const base = new Set(prev ?? availableModels);
+      if (base.has(model)) { base.delete(model); } else { base.add(model); }
+      return base.size === availableModels.length ? null : base;
+    });
+  }
+
+  // ── Derived: heatmap ───────────────────────────────────────────────────────
+
   // Non-validation runs only
-  const sovRuns = runs.filter((r) => r.query_intent !== "validation");
+  const sovRuns = baseRuns.filter((r) => r.query_intent !== "validation");
 
   // Apply intent filter
   const filteredRuns =
     intentFilter === "all"
-      ? sovRuns.filter((r) => SOV_INTENTS.includes((r.query_intent ?? "problem_aware") as QueryIntent))
+      ? sovRuns.filter((r) => r.query_intent !== null && SOV_INTENTS.includes(r.query_intent as QueryIntent))
       : sovRuns.filter((r) => r.query_intent === intentFilter);
 
   // Set of query_id:model pairs in the filtered scope
@@ -386,22 +452,23 @@ function ShareOfVoiceInner() {
   // Filtered rbm rows — only those whose (query_id, model) appear in filteredRuns
   const filteredRbm = rbmRows.filter((r) => filteredQMPairs.has(`${r.query_id}:${r.model}`));
 
-  // Build heatmap rows using rbm for cell values (spec requirement)
+  // Build heatmap rows — "No Brand Visible" is a special meta-row appended last
   const heatmapRows: HeatmapRow[] = [
     { name: brandName, isBrand: true, byModel: {} },
     ...competitors.map((c) => ({ name: c.name, isBrand: false, byModel: {} })),
+    { name: "No Brand Visible", isBrand: false, isSpecialRow: true, byModel: {} },
   ];
+  const noBrandRowIdx = heatmapRows.length - 1;
+  const lowerBrandName = brandName.toLowerCase();
 
   for (const model of trackedModels) {
     const modelRuns = filteredRuns.filter((r) => r.model === model);
     const total = modelRuns.length;
     if (total === 0) continue;
 
-    const modelQueryIds = new Set(modelRuns.map((r) => r.query_id));
-
-    // Brand row — count query_ids confirmed mentioned by rbm (is_tracked_brand=true)
+    // Brand row — count ALL mentions (any sentiment) by matching brand name, not just is_tracked_brand
     const brandMentionedQIds = new Set(
-      filteredRbm.filter((r) => r.is_tracked_brand && r.model === model).map((r) => r.query_id)
+      filteredRbm.filter((r) => r.brand_name.toLowerCase() === lowerBrandName && r.model === model).map((r) => r.query_id)
     );
     const brandCount = modelRuns.filter((r) => brandMentionedQIds.has(r.query_id)).length;
     heatmapRows[0].byModel[model] = {
@@ -410,12 +477,21 @@ function ShareOfVoiceInner() {
       topQueries: modelRuns.filter((r) => brandMentionedQIds.has(r.query_id)).slice(0, 2).map((r) => r.query_text),
     };
 
-    // Competitor rows
+    // Competitor rows — use tracking_runs.competitors_mentioned (stamped at run time, always populated)
+    // rather than response_brand_mentions which may have coverage gaps for older runs.
+    // Use normalized substring matching: LLMs may abbreviate names (e.g. "Johnson & Johnson" vs
+    // "Johnson & Johnson personal care brands"), so we match if either string contains the other.
     competitors.forEach((comp, idx) => {
+      const lowerCompName = comp.name.toLowerCase().trim();
       const compQIds = new Set(
-        filteredRbm.filter((r) => r.brand_name === comp.name && r.model === model).map((r) => r.query_id)
+        modelRuns.filter((r) =>
+          (r.competitors_mentioned ?? []).some((m) => {
+            const lowerM = m.toLowerCase().trim();
+            return lowerM === lowerCompName || lowerCompName.includes(lowerM) || lowerM.includes(lowerCompName);
+          })
+        ).map((r) => r.query_id)
       );
-      const compCount = modelRuns.filter((r) => compQIds.has(r.query_id) && modelQueryIds.has(r.query_id)).length;
+      const compCount = modelRuns.filter((r) => compQIds.has(r.query_id)).length;
       heatmapRows[idx + 1].byModel[model] = {
         mentionRate: total > 0 ? Math.round((compCount / total) * 100) : 0,
         isPrimary: false,
@@ -423,11 +499,83 @@ function ShareOfVoiceInner() {
       };
     });
 
-    // Crown: highest % per column
+    // No Brand Visible row — runs where no entity at all appears in rbm for this model
+    const anyEntityQIds = new Set(filteredRbm.filter((r) => r.model === model).map((r) => r.query_id));
+    const noBrandCount = modelRuns.filter((r) => !anyEntityQIds.has(r.query_id)).length;
+    heatmapRows[noBrandRowIdx].byModel[model] = {
+      mentionRate: total > 0 ? Math.round((noBrandCount / total) * 100) : 0,
+      isPrimary: false,
+      topQueries: modelRuns.filter((r) => !anyEntityQIds.has(r.query_id)).slice(0, 2).map((r) => r.query_text),
+    };
+
+    // Crown: highest % per column — skip special rows
     let maxRate = 0; let primaryIdx = 0;
-    heatmapRows.forEach((row, i) => { const rate = row.byModel[model]?.mentionRate ?? 0; if (rate > maxRate) { maxRate = rate; primaryIdx = i; } });
+    heatmapRows.forEach((row, i) => {
+      if (row.isSpecialRow) return;
+      const rate = row.byModel[model]?.mentionRate ?? 0;
+      if (rate > maxRate) { maxRate = rate; primaryIdx = i; }
+    });
     if (maxRate > 0) heatmapRows[primaryIdx].byModel[model]!.isPrimary = true;
   }
+
+  // Remove competitors with zero presence across all tracked models — collect their names for the footnote.
+  // Only filters non-brand, non-special rows so the brand row and "No Brand Visible" are always shown.
+  const zeroPresenceNames: string[] = [];
+  const visibleHeatmapRows = heatmapRows.filter((row) => {
+    if (row.isBrand || row.isSpecialRow) return true;
+    const totalRate = trackedModels.reduce((sum, m) => sum + (row.byModel[m]?.mentionRate ?? 0), 0);
+    if (totalRate === 0) { zeroPresenceNames.push(row.name); return false; }
+    return true;
+  });
+
+  // ── Derived: Visibility Trend ─────────────────────────────────────────────
+  // problem_aware + category only; date + model filter already applied via baseRuns
+  const trendRuns = baseRuns.filter(
+    (r) => r.query_intent === "problem_aware" || r.query_intent === "category"
+  );
+  const trendDailyMap = new Map<string, EnrichedRun[]>();
+  for (const r of trendRuns) {
+    const date = r.ran_at.slice(0, 10); // YYYY-MM-DD
+    if (!trendDailyMap.has(date)) trendDailyMap.set(date, []);
+    trendDailyMap.get(date)!.push(r);
+  }
+  const trendDates = Array.from(trendDailyMap.keys()).sort();
+
+  // One entry per entity: own brand first, then competitors in order
+  const trendEntities = [
+    { key: brandName, label: brandName, color: ENTITY_COLORS[0] },
+    ...competitors.map((comp, i) => ({
+      key: comp.name,
+      label: comp.name,
+      color: ENTITY_COLORS[(i + 1) % ENTITY_COLORS.length],
+    })),
+  ];
+
+  const trendData = trendDates.map((date) => {
+    const dayRuns = trendDailyMap.get(date)!;
+    const total = dayRuns.length;
+    const entry: Record<string, number | string> = { date: formatTrendDate(date) };
+    // Own brand: brand_mentioned = true
+    const brandCount = dayRuns.filter((r) => r.brand_mentioned === true).length;
+    entry[brandName] = total > 0 ? Math.round((brandCount / total) * 100) : 0;
+    // Competitors: normalised substring match (same logic as heatmap)
+    for (const comp of competitors) {
+      const lowerCompName = comp.name.toLowerCase().trim();
+      const compCount = dayRuns.filter((r) =>
+        (r.competitors_mentioned ?? []).some((m) => {
+          const lowerM = m.toLowerCase().trim();
+          return lowerM === lowerCompName || lowerCompName.includes(lowerM) || lowerM.includes(lowerCompName);
+        })
+      ).length;
+      entry[comp.name] = total > 0 ? Math.round((compCount / total) * 100) : 0;
+    }
+    return entry;
+  });
+
+  const trendDateRange =
+    trendDates.length >= 2
+      ? `${formatTrendDate(trendDates[0])} – ${formatTrendDate(trendDates[trendDates.length - 1])}`
+      : trendDates.length === 1 ? formatTrendDate(trendDates[0]) : "";
 
   // ── Derived: Competitor Displacement ──────────────────────────────────────
 
@@ -462,9 +610,38 @@ function ShareOfVoiceInner() {
   });
   const displacementRows = Object.values(compGapMap).sort((a, b) => b.displacementCount - a.displacementCount);
 
+  // ── Derived: Velocity per competitor (date-over-date, uses all runs for stability) ──
+  const velocityDateMap = new Map<string, Map<string, number>>();
+  for (const r of runs) {
+    if (r.brand_mentioned !== false) continue;
+    if (brandQMSet.has(`${r.query_id}:${r.model}`)) continue;
+    const date = r.ran_at.slice(0, 10);
+    if (!velocityDateMap.has(date)) velocityDateMap.set(date, new Map());
+    const dateMap = velocityDateMap.get(date)!;
+    for (const comp of (r.competitors_mentioned ?? [])) {
+      dateMap.set(comp, (dateMap.get(comp) ?? 0) + 1);
+    }
+  }
+  const velocityDates = Array.from(velocityDateMap.keys()).sort().reverse(); // newest first
+  const hasVelocityData = velocityDates.length >= 2;
+
+  function getCompVelocity(compName: string): { dir: "up" | "down" | "same"; pct: number } {
+    if (!hasVelocityData) return { dir: "same", pct: 0 };
+    const latest = velocityDateMap.get(velocityDates[0])?.get(compName) ?? 0;
+    const prev   = velocityDateMap.get(velocityDates[1])?.get(compName) ?? 0;
+    if (prev === 0 && latest === 0) return { dir: "same", pct: 0 };
+    if (prev === 0) return { dir: "up", pct: 100 };
+    const pct = Math.round(((latest - prev) / prev) * 100);
+    if (pct > 0) return { dir: "up",   pct };
+    if (pct < 0) return { dir: "down", pct: Math.abs(pct) };
+    return { dir: "same", pct: 0 };
+  }
+
   // ── Derived: Gap Clusters ─────────────────────────────────────────────────
 
-  const clusterSource = clusterRuns.length > 0 ? clusterRuns : runs;
+  // Apply model filter to cluster source (date filter not applied — clusters are keyed by run_date)
+  const rawClusterSource = clusterRuns.length > 0 ? clusterRuns : runs;
+  const clusterSource = rawClusterSource.filter((r) => effectiveModelSet.has(r.model as LLMModel));
 
   const clusterStats = new Map<string, { displaced: number; open: number }>();
   for (const cluster of clusters) {
@@ -499,36 +676,179 @@ function ShareOfVoiceInner() {
   }
 
   return (
-    <div className="p-8 max-w-5xl mx-auto">
+    <div>
+      {/* ── Sticky filter bar ─────────────────────────────────────────────── */}
+      <div className="sticky top-0 z-20 bg-white/95 backdrop-blur-sm border-b border-[#E2E8F0]">
+        <div className="max-w-[1000px] mx-auto px-8 py-3 flex items-center gap-4 flex-wrap">
+
+          {/* Period */}
+          <div className="flex items-center gap-1.5">
+            <span className="text-[10px] font-bold uppercase tracking-[1.5px] text-[#9CA3AF] mr-0.5 shrink-0">Period</span>
+            {DATE_OPTIONS.map(({ value, label }) => (
+              <button
+                key={value}
+                type="button"
+                onClick={() => setDateRange(value)}
+                className={`rounded-full border px-3 py-1 text-[11px] font-bold transition-colors ${
+                  dateRange === value
+                    ? "bg-[#0D0437] text-white border-[#0D0437]"
+                    : "border-[#E2E8F0] text-[#6B7280] hover:border-[#0D0437] hover:text-[#0D0437]"
+                }`}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+
+          <div className="h-4 w-px bg-[#E2E8F0] shrink-0" />
+
+          {/* Intent */}
+          <div className="flex items-center gap-1.5">
+            <span className="text-[10px] font-bold uppercase tracking-[1.5px] text-[#9CA3AF] mr-0.5 shrink-0">Intent</span>
+            {INTENT_FILTER_OPTIONS.map(({ value, label }) => (
+              <button
+                key={value}
+                type="button"
+                onClick={() => setIntentFilter(value)}
+                className={`rounded-full border px-3 py-1 text-[11px] font-bold transition-colors ${
+                  intentFilter === value
+                    ? "bg-[#0D0437] text-white border-[#0D0437]"
+                    : "border-[#E2E8F0] text-[#6B7280] hover:border-[#0D0437] hover:text-[#0D0437]"
+                }`}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+
+          {availableModels.length > 0 && (
+            <>
+              <div className="h-4 w-px bg-[#E2E8F0] shrink-0" />
+
+              {/* Model — multi-select */}
+              <div className="flex items-center gap-1.5 flex-wrap">
+                <span className="text-[10px] font-bold uppercase tracking-[1.5px] text-[#9CA3AF] mr-0.5 shrink-0">Model</span>
+                {availableModels.map((m) => {
+                  const active = effectiveModelSet.has(m);
+                  return (
+                    <button
+                      key={m}
+                      type="button"
+                      onClick={() => toggleModel(m)}
+                      className={`rounded-full border px-3 py-1 text-[11px] font-bold transition-colors ${
+                        active
+                          ? MODEL_PILL[m] ?? "bg-[#F4F6F9] text-[#6B7280] border-[#E2E8F0]"
+                          : "border-[#E2E8F0] text-[#C4C9D4] bg-white"
+                      }`}
+                    >
+                      {MODEL_LABELS[m]}
+                    </button>
+                  );
+                })}
+              </div>
+            </>
+          )}
+        </div>
+      </div>
+
+      {/* ── Page content ──────────────────────────────────────────────────── */}
+      <div className="p-8 max-w-[1000px] mx-auto">
       {/* ── Header ──────────────────────────────────────────────────────────── */}
       <div className="mb-2">
         <h1 className="text-[28px] font-bold text-[#0D0437] leading-tight">AI Share of Voice</h1>
-        <p className="text-[12px] text-[#9CA3AF] font-mono mt-1">{brandName}</p>
+        <p className="text-[13px] text-[#6B7280] mt-1">
+          How often your brand appears when AI answers questions your buyers are asking
+        </p>
+        <p className="text-[12px] text-[#9CA3AF] mt-1 leading-relaxed">
+          Based on problem-awareness and category queries — the intents where buyers are researching solutions, not yet comparing brands.
+        </p>
       </div>
 
       {/* ─────────────── SECTION 1: SHARE OF MODEL HEATMAP ─────────────────── */}
       <SectionLabel>Share of Model Heatmap</SectionLabel>
 
-      {/* Filter tabs */}
-      <div className="flex gap-2 flex-wrap mb-4">
-        {INTENT_FILTER_OPTIONS.map(({ value, label }) => (
-          <button
-            key={value}
-            type="button"
-            onClick={() => setIntentFilter(value)}
-            className={`rounded-full border px-4 py-1.5 text-[11px] font-bold transition-colors ${
-              intentFilter === value
-                ? "bg-[#0D0437] text-white border-[#0D0437]"
-                : "border-[#E2E8F0] text-[#6B7280] hover:border-[#0D0437] hover:text-[#0D0437]"
-            }`}
-          >
-            {label}
-          </button>
-        ))}
+      <div className="mb-2">
+        <ModelIntentHeatmap rows={visibleHeatmapRows} models={filteredModels} />
       </div>
 
-      <div className="mb-6">
-        <ModelIntentHeatmap rows={heatmapRows} models={trackedModels} />
+      {zeroPresenceNames.length > 0 && (
+        <p className="text-[11px] text-[#9CA3AF] mb-6 leading-relaxed">
+          <span className="font-medium">Not found in any LLM responses:</span>{" "}
+          {zeroPresenceNames.join(", ")}
+        </p>
+      )}
+
+      {/* ─────────────── SECTION 1.5: VISIBILITY TREND ──────────────────────── */}
+      <SectionLabel>Visibility Trend</SectionLabel>
+      <div className="border border-[#E2E8F0] rounded-xl bg-white p-6 mb-8">
+        {trendDateRange && (
+          <p className="text-[11px] text-[#9CA3AF] mb-4">{trendDateRange}</p>
+        )}
+        {trendData.length < 2 ? (
+          /* Empty state: muted placeholder with fake gridlines */
+          <div className="relative h-[240px] rounded-lg overflow-hidden bg-[#F9FAFB] border border-dashed border-[#E5E7EB]">
+            {[75, 50, 25].map((pct) => (
+              <div
+                key={pct}
+                className="absolute w-full border-t border-dashed border-[#E5E7EB]"
+                style={{ top: `${100 - pct}%` }}
+              />
+            ))}
+            <div className="absolute inset-0 flex items-center justify-center">
+              <p className="text-[13px] text-[#9CA3AF]">
+                Trend data available after 2 tracking runs
+              </p>
+            </div>
+          </div>
+        ) : (
+          <>
+            <ResponsiveContainer width="100%" height={240}>
+              <LineChart data={trendData} margin={{ top: 4, right: 16, bottom: 0, left: -16 }}>
+                <CartesianGrid strokeDasharray="3 3" stroke="#F0F2F5" />
+                <XAxis dataKey="date" tick={{ fontSize: 10, fill: "#9CA3AF" }} />
+                <YAxis
+                  domain={[0, 100]}
+                  tick={{ fontSize: 10, fill: "#9CA3AF" }}
+                  tickFormatter={(v) => `${v}%`}
+                />
+                <Tooltip
+                  formatter={(value: number, name: string) => [`${value}%`, name]}
+                  contentStyle={{
+                    background: "#fff",
+                    border: "1px solid #E2E8F0",
+                    borderRadius: "8px",
+                    fontSize: 11,
+                  }}
+                />
+                {trendEntities.map((entity) => (
+                  <Line
+                    key={entity.key}
+                    type="monotone"
+                    dataKey={entity.key}
+                    name={entity.label}
+                    stroke={entity.color}
+                    strokeWidth={2}
+                    dot={{ r: 3 }}
+                    activeDot={{ r: 5 }}
+                    connectNulls
+                  />
+                ))}
+              </LineChart>
+            </ResponsiveContainer>
+            {/* Entity legend */}
+            <div className="flex flex-wrap gap-3 mt-4">
+              {trendEntities.map((entity) => (
+                <span key={entity.key} className="flex items-center gap-1.5 text-[11px] text-[#6B7280]">
+                  <span
+                    className="inline-block h-2 w-2 rounded-full shrink-0"
+                    style={{ background: entity.color }}
+                  />
+                  {entity.label}
+                </span>
+              ))}
+            </div>
+          </>
+        )}
       </div>
 
       {/* ─────────────── SECTION 2: GAP CLUSTERS ───────────────────────────── */}
@@ -606,11 +926,15 @@ function ShareOfVoiceInner() {
             <table className="w-full text-sm">
               <thead>
                 <tr className="border-b border-[#E2E8F0] bg-[#F4F6F9]">
-                  {["Competitor", "Displacement Count", "Models", "Sample Query"].map((h) => (
-                    <th key={h} className="text-left px-4 py-3 text-[8px] font-bold tracking-[2px] uppercase text-[#6B7280]">
-                      {h}
-                    </th>
-                  ))}
+                  <th className="text-left px-4 py-3 text-[8px] font-bold tracking-[2px] uppercase text-[#6B7280]">Competitor</th>
+                  <th
+                    className="text-left px-4 py-3 text-[8px] font-bold tracking-[2px] uppercase text-[#6B7280]"
+                    title={!hasVelocityData ? "Velocity available after 2 tracking runs" : undefined}
+                  >
+                    Displacement Count
+                  </th>
+                  <th className="text-left px-4 py-3 text-[8px] font-bold tracking-[2px] uppercase text-[#6B7280]">Models</th>
+                  <th className="text-left px-4 py-3 text-[8px] font-bold tracking-[2px] uppercase text-[#6B7280]">Sample Query</th>
                 </tr>
               </thead>
               <tbody>
@@ -633,8 +957,11 @@ function ShareOfVoiceInner() {
                   >
                     <td className="px-4 py-3 font-bold text-[13px] text-[#0D0437]">{comp.name}</td>
                     <td className="px-4 py-3">
-                      <div className="w-8 h-8 rounded-full bg-[rgba(255,75,110,0.10)] text-[#FF4B6E] font-bold text-[12px] flex items-center justify-center">
-                        {comp.displacementCount}
+                      <div className="flex items-center gap-2">
+                        <div className="w-8 h-8 rounded-full bg-[rgba(255,75,110,0.10)] text-[#FF4B6E] font-bold text-[12px] flex items-center justify-center shrink-0">
+                          {comp.displacementCount}
+                        </div>
+                        {hasVelocityData && <VelocityBadge {...getCompVelocity(comp.name)} />}
                       </div>
                     </td>
                     <td className="px-4 py-3">
@@ -692,6 +1019,7 @@ function ShareOfVoiceInner() {
           onClose={() => setDrawer(null)}
         />
       )}
+      </div>
     </div>
   );
 }
