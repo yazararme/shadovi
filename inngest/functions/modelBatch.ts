@@ -14,7 +14,7 @@ export const trackingModelBatchFunction = inngest.createFunction(
     // No per-client concurrency key here — we WANT multiple model batches for the
     // same client to run in parallel. The parent (tracking-run) enforces the
     // one-run-per-client guarantee via its own concurrency config.
-    concurrency: { limit: 15 },
+    concurrency: { limit: 5 },
   },
   // Event name is required but this function is only ever invoked via step.invoke()
   { event: "tracking/model-batch.requested" },
