@@ -1,5 +1,6 @@
 import { inngest } from "@/inngest/client";
-import { fetchRunContext, runModelBatch, finaliseRun } from "@/lib/tracking/runner";
+import { fetchRunContext, finaliseRun } from "@/lib/tracking/runner";
+import { trackingModelBatchFunction } from "@/inngest/functions/modelBatch";
 import { clusterGapsForClient } from "@/lib/tracking/gap-clusterer";
 
 export const trackingRunFunction = inngest.createFunction(
@@ -21,13 +22,22 @@ export const trackingRunFunction = inngest.createFunction(
     // Stored as Inngest state so subsequent steps don't need to re-query the DB.
     const ctx = await step.run("setup", () => fetchRunContext(clientId));
 
-    // Steps 2-N: One step per model — each runs independently with its own timeout.
-    // Promise.all fans out to parallel Inngest steps; the function suspends and
-    // resumes as each completes. Previously all models ran inside a single step
-    // ("execute-tracking"), which timed out at 5 minutes for a full portfolio run.
+    // Steps 2-N: Fan-out — one step.invoke() per model running in true parallel.
+    //
+    // step.invoke() calls trackingModelBatchFunction as a child function run.
+    // Unlike step.run(), child invocations are independent function runs and do NOT
+    // share the parent's concurrency slot (the { limit:1, key:clientId } above).
+    // This means all 5 model batches start immediately and run concurrently.
+    //
+    // Previously these were step.run() calls in Promise.all, which ran sequentially
+    // because each step.run competed for the same per-client concurrency slot.
     const modelResults = await Promise.all(
       ctx.selectedModels.map((model) =>
-        step.run(`model-${model}`, () => runModelBatch(ctx, model))
+        step.invoke(`model-${model}`, {
+          function: trackingModelBatchFunction,
+          data: { ctx, model },
+          timeout: "10m",
+        })
       )
     );
 

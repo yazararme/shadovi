@@ -263,7 +263,17 @@ export async function fetchRunContext(clientId: string): Promise<RunContext> {
   }
 
   const brandName: string = client.brand_dna?.brand_name ?? "Unknown Brand";
-  const selectedModels: LLMModel[] = (client.selected_models ?? ["gpt-4o", "perplexity"]) as LLMModel[];
+
+  // Normalise legacy model identifiers stored in the DB before the full model ID
+  // was standardised. "claude" was used before "claude-sonnet-4-6" was set as the
+  // canonical ID — keep this map updated as model IDs evolve.
+  const MODEL_ALIASES: Record<string, LLMModel> = {
+    "claude": "claude-sonnet-4-6",
+    "claude-3": "claude-sonnet-4-6",
+    "claude-3-5": "claude-sonnet-4-6",
+  };
+  const selectedModels: LLMModel[] = (client.selected_models ?? ["gpt-4o", "perplexity"])
+    .map((m: string) => MODEL_ALIASES[m] ?? m) as LLMModel[];
 
   const { data: queries } = await supabase
     .from("queries")
