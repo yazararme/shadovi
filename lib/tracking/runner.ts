@@ -221,12 +221,37 @@ function parseExtractionJson(raw: string, queryId: string): ExtractionBrand[] | 
   }
 }
 
-export async function runTrackingForClient(
-  clientId: string
-): Promise<{ runsCreated: number }> {
+// ── Public types ───────────────────────────────────────────────────────────────
+
+/** Serialisable context fetched once in the setup step and shared across model steps. */
+export interface RunContext {
+  clientId: string;
+  brandName: string;
+  selectedModels: LLMModel[];
+  queries: Pick<Query, "id" | "text" | "intent" | "fact_id" | "is_bait" | "version_id">[];
+  competitorList: Pick<Competitor, "name">[];
+  /** Plain array — Maps are not JSON-serialisable across Inngest step boundaries. */
+  facts: BrandFact[];
+  versionId: string | null;
+}
+
+export interface ModelBatchResult {
+  model: LLMModel;
+  runsCreated: number;
+  mentioned: number;
+  missedQueryTexts: string[];
+  competitorCounts: Record<string, number>;
+}
+
+// ── Step 1: setup ──────────────────────────────────────────────────────────────
+
+/**
+ * Fetch everything the run needs (client, queries, competitors, facts, version)
+ * and return a plain JSON-serialisable object for Inngest to checkpoint.
+ */
+export async function fetchRunContext(clientId: string): Promise<RunContext> {
   const supabase = createServiceClient();
 
-  // ── 1. Fetch client ────────────────────────────────────────────────────────
   const { data: client } = await supabase
     .from("clients")
     .select("id, status, selected_models, brand_dna")
@@ -240,7 +265,6 @@ export async function runTrackingForClient(
   const brandName: string = client.brand_dna?.brand_name ?? "Unknown Brand";
   const selectedModels: LLMModel[] = (client.selected_models ?? ["gpt-4o", "perplexity"]) as LLMModel[];
 
-  // ── 2. Fetch active queries (include fact_id, is_bait for scoring logic) ──
   const { data: queries } = await supabase
     .from("queries")
     .select("id, text, intent, fact_id, is_bait, version_id")
@@ -251,376 +275,386 @@ export async function runTrackingForClient(
     throw new Error(`No active queries for client ${clientId}`);
   }
 
-  // ── 3. Fetch competitors + brand facts ────────────────────────────────────
-  const [{ data: competitors }, { data: factsData }] = await Promise.all([
+  const [{ data: competitors }, { data: factsData }, { data: activeVersion }] = await Promise.all([
     supabase.from("competitors").select("id, name").eq("client_id", clientId),
     supabase.from("brand_facts").select("*").eq("client_id", clientId),
+    supabase
+      .from("portfolio_versions")
+      .select("id")
+      .eq("client_id", clientId)
+      .eq("is_active", true)
+      .single(),
   ]);
 
-  const competitorList = (competitors ?? []) as Pick<Competitor, "name">[];
+  return {
+    clientId,
+    brandName,
+    selectedModels,
+    queries: queries as RunContext["queries"],
+    competitorList: (competitors ?? []) as Pick<Competitor, "name">[],
+    facts: (factsData ?? []) as BrandFact[],
+    // Using the live is_active flag rather than query.version_id so that a version
+    // change between query generation and run time is correctly reflected.
+    versionId: activeVersion?.id ?? null,
+  };
+}
 
-  // Build id→fact lookup for knowledge scoring
+// ── Step 2 (per model): run all queries against one model ──────────────────────
+
+/**
+ * Process all queries for a single model. Called once per model as a separate
+ * Inngest step so each model's work has its own timeout and retry budget.
+ */
+export async function runModelBatch(ctx: RunContext, model: LLMModel): Promise<ModelBatchResult> {
+  const supabase = createServiceClient();
+  const { clientId, brandName, queries, competitorList, facts, versionId } = ctx;
+
+  // Rebuild factMap from the serialised facts array (Maps aren't JSON-serialisable)
   const factMap = new Map<string, BrandFact>();
-  ((factsData ?? []) as BrandFact[]).forEach((f) => factMap.set(f.id, f));
+  facts.forEach((f) => factMap.set(f.id, f));
 
-  // ── Fetch active portfolio version once — stamped on all inserts below ──────
-  // Using the live is_active flag rather than query.version_id so that a version
-  // change between query generation and run time is correctly reflected.
-  const { data: activeVersion } = await supabase
-    .from("portfolio_versions")
-    .select("id")
-    .eq("client_id", clientId)
-    .eq("is_active", true)
-    .single();
+  let modelRunsCreated = 0;
+  let modelMentioned = 0;
+  const modelMissed: string[] = [];
+  const modelCompetitorCounts: Record<string, number> = {};
 
-  const versionId = activeVersion?.id ?? null;
+  for (const query of queries as Pick<Query, "id" | "text" | "intent" | "fact_id" | "is_bait" | "version_id">[]) {
+    // Perplexity sonar-pro has a tight rate limit. A brief pause between serial
+    // queries prevents the burst from exhausting the limit and dropping queries.
+    if (model === "perplexity") {
+      await new Promise((r) => setTimeout(r, 1_500));
+    }
 
-  // ── 4. Run queries × models ────────────────────────────────────────────────
-  // Each model is a different API provider with independent rate limits, so we run them
-  // in parallel. Within each model, queries stay serial to respect per-provider limits.
-  // This cuts wall-clock time from (4 × model_time) to max(model_time) — roughly 4× faster.
+    let rawResponse = "";
+    // Perplexity returns a native citations array in the API response alongside
+    // the message content. Capture it here so cited_sources reflects the
+    // authoritative list rather than regex extraction from the response text.
+    let perplexityCitations: string[] = [];
+    try {
+      if (model === "perplexity") {
+        const { text, citations } = await withTimeout(
+          callPerplexityFull(query.text),
+          PRIMARY_TIMEOUT_MS[model],
+          `${model} primary query=${query.id}`
+        );
+        rawResponse = text;
+        perplexityCitations = citations;
+      } else {
+        rawResponse = await withTimeout(
+          LLM_CALLERS[model](query.text),
+          PRIMARY_TIMEOUT_MS[model],
+          `${model} primary query=${query.id}`
+        );
+      }
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      console.error(`[runner] LLM error model=${model} query=${query.id}: ${msg}`);
+      continue;
+    }
 
+    const scored = scoreResponse(rawResponse, brandName, competitorList);
+
+    // Insert tracking_run row — select() returns the inserted row so we have its id
+    // for the knowledge scoring and enrichment steps below.
+    const { data: insertedRun, error: insertError } = await supabase
+      .from("tracking_runs")
+      .insert({
+        query_id: query.id,
+        client_id: clientId,
+        model,
+        raw_response: rawResponse,
+        brand_mentioned: scored.brand_mentioned,
+        mention_position: scored.mention_position,
+        mention_sentiment: scored.mention_sentiment,
+        competitors_mentioned: scored.competitors_mentioned,
+        // Perplexity returns an authoritative citations array in the API response;
+        // prefer that over the scorer's regex extraction from response text.
+        cited_sources: perplexityCitations.length > 0 ? perplexityCitations : scored.cited_sources,
+        share_of_model_score: scored.share_of_model_score,
+        // Denormalised fields stamped at insert time to avoid joins in downstream queries
+        query_intent: query.intent,
+        citation_present: perplexityCitations.length > 0 || (Array.isArray(scored.cited_sources) && scored.cited_sources.length > 0),
+        // version_id stamped from the active portfolio_versions record fetched before the loop.
+        version_id: versionId,
+      })
+      .select()
+      .single();
+
+    if (insertError) {
+      console.error("[runner] Insert error:", insertError.message);
+    } else {
+      modelRunsCreated++;
+
+      // For validation queries anchored to a brand fact, run secondary Haiku scoring.
+      // Applied forward only — historical runs are not retroactively scored.
+      if (query.intent === "validation" && query.fact_id && insertedRun) {
+        const fact = factMap.get(query.fact_id);
+        if (fact) {
+          // ── Knowledge scoring (Haiku) ──────────────────────────────────
+          let ks;
+          try {
+            ks = await withTimeout(
+              scoreKnowledge(query.text, rawResponse, fact),
+              45_000,
+              `haiku-scorer query=${query.id}`
+            );
+
+            // bait_triggered: the bait worked — LLM confirmed a false claim.
+            // NOTE: in our scorer, accuracy "incorrect" on a bait query means the LLM
+            // confirmed the false claim (NOT "correct"). The doc had this inverted.
+            const bait_triggered = (query.is_bait === true) && (ks.accuracy === "incorrect");
+
+            const { error: ksInsertError } = await supabase.from("brand_knowledge_scores").insert({
+              tracking_run_id: insertedRun.id,
+              fact_id: fact.id,
+              client_id: clientId,
+              accuracy: ks.accuracy,
+              completeness: ks.completeness,
+              hallucination: ks.hallucination,
+              notes: ks.notes,
+              scorer_model: ks.scorer_model,
+              bait_triggered,
+              brand_positioning: ks.brand_positioning,
+              version_id: versionId,
+            });
+            if (ksInsertError) {
+              console.error(
+                `[runner] brand_knowledge_scores insert failed model=${model} query=${query.id}: ${ksInsertError.message}`
+              );
+            }
+
+            // Write brand_positioning back to tracking_run as well so it's available
+            // without joining brand_knowledge_scores in Coverage by Category queries.
+            const { error: bpUpdateError } = await supabase
+              .from("tracking_runs")
+              .update({ brand_positioning: ks.brand_positioning })
+              .eq("id", insertedRun.id);
+            if (bpUpdateError) {
+              console.error(
+                `[runner] brand_positioning update failed model=${model} query=${query.id}: ${bpUpdateError.message}`
+              );
+            }
+          } catch (err) {
+            console.error(
+              `[runner] Knowledge scoring failed model=${model} query=${query.id}: ${err instanceof Error ? err.message : String(err)}`
+            );
+          }
+
+          // ── Source Intelligence enrichment call ────────────────────────
+          // ENRICHMENT_ENABLED=true re-activates this block. Currently disabled:
+          // source_attribution / content_age_estimate / competitor_mentions_unprompted
+          // are not yet surfaced in the dashboard, so running 36+ extra primary-model
+          // calls per tracking run is pure cost/time waste at this stage.
+          // When the Source Intelligence dashboard panels are built, flip the flag.
+          if (process.env.ENRICHMENT_ENABLED === "true") {
+            try {
+              const enrichPrompt = buildEnrichmentPrompt(query.text, rawResponse, brandName);
+              const enrichRaw = await withTimeout(
+                LLM_CALLERS[model](enrichPrompt),
+                45_000,
+                `${model} enrichment query=${query.id}`
+              );
+
+              let enriched = parseEnrichmentJson(enrichRaw, model, query.id);
+
+              if (!enriched) {
+                const retryPrompt =
+                  enrichPrompt +
+                  "\n\nReturn raw JSON only. No markdown, no code blocks, no explanation.";
+                const retryRaw = await withTimeout(
+                  LLM_CALLERS[model](retryPrompt),
+                  45_000,
+                  `${model} enrichment-retry query=${query.id}`
+                );
+                enriched = parseEnrichmentJson(retryRaw, model, `${query.id}/retry`);
+                if (!enriched) {
+                  console.error(
+                    `[runner] enrichment skipped after retry model=${model} query=${query.id}`
+                  );
+                }
+              }
+
+              if (enriched) {
+                await supabase
+                  .from("tracking_runs")
+                  .update({
+                    source_attribution: enriched.sources,
+                    content_age_estimate: enriched.content_age,
+                    competitor_mentions_unprompted: enriched.competitor_mentions,
+                  })
+                  .eq("id", insertedRun.id);
+              }
+            } catch (err) {
+              console.error(
+                `[runner] Enrichment call failed model=${model} query=${query.id}: ${err instanceof Error ? err.message : String(err)}`
+              );
+            }
+          }
+        }
+      }
+
+      // ── Competitive mention extraction (Haiku) ────────────────────────
+      // Runs on problem_aware, category, and comparative — all three intents where
+      // organic brand mentions are meaningful. Validation is still excluded
+      // (Beko-framed prompts; competitors are named explicitly, not discovered).
+      if ((query.intent === "problem_aware" || query.intent === "category" || query.intent === "comparative") && insertedRun) {
+        try {
+          const extractionPrompt = buildExtractionPrompt(query.text, rawResponse);
+          const extractionRaw = await withTimeout(
+            callHaiku(extractionPrompt),
+            10_000,
+            `haiku-extraction query=${query.id}`
+          );
+
+          const brands = parseExtractionJson(extractionRaw, query.id);
+          if (brands && brands.length > 0) {
+            const rows = brands.map((b) => ({
+              tracking_run_id: insertedRun.id,
+              query_id: query.id,
+              client_id: clientId,
+              model,
+              query_intent: query.intent,
+              brand_name_raw: b.brand,
+              brand_name: normaliseBrandName(b.brand),
+              is_tracked_brand:
+                normaliseBrandName(b.brand).toLowerCase() === brandName.toLowerCase(),
+              mention_context: b.context,
+              mention_sentiment: b.sentiment,
+              version_id: versionId,
+            }));
+
+            const { error: mentionInsertError } = await supabase
+              .from("response_brand_mentions")
+              .insert(rows);
+            if (mentionInsertError) {
+              console.error(
+                `[runner] response_brand_mentions insert failed model=${model} query=${query.id}: ${mentionInsertError.message}`
+              );
+            }
+
+            // Log unmatched brand names so the normalisation map can be extended
+            const unmatched = brands
+              .map((b) => b.brand)
+              .filter((raw) => !BRAND_NORMALISATION_MAP[raw.toLowerCase().trim()]);
+            if (unmatched.length > 0) {
+              console.log("[brand-normaliser] Unmatched brands (add to map):", unmatched);
+            }
+          }
+        } catch (err) {
+          // Non-critical — log and continue; do not fail the run
+          console.error(
+            `[runner] Brand extraction failed model=${model} query=${query.id}: ${err instanceof Error ? err.message : String(err)}`
+          );
+        }
+      }
+
+      // ── Brand mention fallback scan ────────────────────────────────────
+      // The scorer uses an exact substring match against the stored brand_name,
+      // which can silently miss the brand if brand_name has surrounding whitespace
+      // or if the brand appears in a list/passing reference the structured
+      // extraction step skipped. If scorer said false, re-check with a trimmed
+      // case-insensitive scan and correct both tracking_runs and response_brand_mentions.
+      if (!scored.brand_mentioned && insertedRun) {
+        const foundByFallback = rawResponse
+          .toLowerCase()
+          .includes(brandName.toLowerCase().trim());
+
+        if (foundByFallback) {
+          // Correct the tracking_run record
+          const { error: updateErr } = await supabase
+            .from("tracking_runs")
+            .update({ brand_mentioned: true })
+            .eq("id", insertedRun.id);
+          if (updateErr) {
+            console.error(
+              `[runner] fallback brand_mentioned update failed model=${model} query=${query.id}: ${updateErr.message}`
+            );
+          } else {
+            // Keep the in-memory scored value in sync so the summary counter is correct
+            scored.brand_mentioned = true;
+
+            // Insert a response_brand_mentions row only if extraction didn't already
+            // create one for this run (avoids duplicate is_tracked_brand rows)
+            const { count: existingCount } = await supabase
+              .from("response_brand_mentions")
+              .select("id", { count: "exact", head: true })
+              .eq("tracking_run_id", insertedRun.id)
+              .eq("is_tracked_brand", true);
+
+            if ((existingCount ?? 0) === 0) {
+              const { error: rbmErr } = await supabase
+                .from("response_brand_mentions")
+                .insert({
+                  tracking_run_id: insertedRun.id,
+                  query_id: query.id,
+                  client_id: clientId,
+                  model,
+                  query_intent: query.intent,
+                  brand_name_raw: brandName,
+                  brand_name: normaliseBrandName(brandName),
+                  is_tracked_brand: true,
+                  mention_context: "Detected by fallback string scan",
+                  mention_sentiment: "unclear",
+                  version_id: versionId,
+                });
+              if (rbmErr) {
+                console.error(
+                  `[runner] fallback response_brand_mentions insert failed model=${model} query=${query.id}: ${rbmErr.message}`
+                );
+              }
+            }
+          }
+        }
+      }
+    }
+
+    if (scored.brand_mentioned && scored.mention_sentiment !== "negative") {
+      modelMentioned++;
+    } else {
+      modelMissed.push(query.text);
+    }
+
+    scored.competitors_mentioned.forEach((name) => {
+      modelCompetitorCounts[name] = (modelCompetitorCounts[name] ?? 0) + 1;
+    });
+  }
+
+  return {
+    model,
+    runsCreated: modelRunsCreated,
+    mentioned: modelMentioned,
+    missedQueryTexts: modelMissed,
+    competitorCounts: modelCompetitorCounts,
+  };
+}
+
+// ── Step 3: finalise ───────────────────────────────────────────────────────────
+
+/**
+ * Merge per-model tallies into a RunSummary and generate AI recommendations.
+ * Kept as a separate step so recommendations have their own timeout budget.
+ */
+export async function finaliseRun(
+  clientId: string,
+  brandName: string,
+  queryCount: number,
+  modelResults: ModelBatchResult[]
+): Promise<{ runsCreated: number }> {
   const runSummary: RunSummary = {
-    totalQueries: queries.length * selectedModels.length,
+    totalQueries: queryCount * modelResults.length,
     queriesWithMention: 0,
     byModel: {},
     missedQueries: [],
     topCompetitorsMentioned: [],
   };
 
-  type ModelResult = {
-    runsCreated: number;
-    mentioned: number;
-    missedQueryTexts: string[];
-    competitorCounts: Record<string, number>;
-  };
-
-  const modelResults = await Promise.all(
-    selectedModels.map(async (model): Promise<ModelResult> => {
-      let modelRunsCreated = 0;
-      let modelMentioned = 0;
-      const modelMissed: string[] = [];
-      const modelCompetitorCounts: Record<string, number> = {};
-
-      for (const query of queries as Pick<Query, "id" | "text" | "intent" | "fact_id" | "is_bait" | "version_id">[]) {
-        // Perplexity sonar-pro has a tight rate limit. A brief pause between serial
-        // queries prevents the burst from exhausting the limit and dropping queries.
-        if (model === "perplexity") {
-          await new Promise((r) => setTimeout(r, 1_500));
-        }
-
-        let rawResponse = "";
-        // Perplexity returns a native citations array in the API response alongside
-        // the message content. Capture it here so cited_sources reflects the
-        // authoritative list rather than regex extraction from the response text.
-        let perplexityCitations: string[] = [];
-        try {
-          if (model === "perplexity") {
-            const { text, citations } = await withTimeout(
-              callPerplexityFull(query.text),
-              PRIMARY_TIMEOUT_MS[model],
-              `${model} primary query=${query.id}`
-            );
-            rawResponse = text;
-            perplexityCitations = citations;
-          } else {
-            rawResponse = await withTimeout(
-              LLM_CALLERS[model](query.text),
-              PRIMARY_TIMEOUT_MS[model],
-              `${model} primary query=${query.id}`
-            );
-          }
-        } catch (err) {
-          const msg = err instanceof Error ? err.message : String(err);
-          console.error(`[runner] LLM error model=${model} query=${query.id}: ${msg}`);
-          continue;
-        }
-
-        const scored = scoreResponse(rawResponse, brandName, competitorList);
-
-        // Insert tracking_run row — select() returns the inserted row so we have its id
-        // for the knowledge scoring and enrichment steps below.
-        const { data: insertedRun, error: insertError } = await supabase
-          .from("tracking_runs")
-          .insert({
-            query_id: query.id,
-            client_id: clientId,
-            model,
-            raw_response: rawResponse,
-            brand_mentioned: scored.brand_mentioned,
-            mention_position: scored.mention_position,
-            mention_sentiment: scored.mention_sentiment,
-            competitors_mentioned: scored.competitors_mentioned,
-            // Perplexity returns an authoritative citations array in the API response;
-            // prefer that over the scorer's regex extraction from response text.
-            cited_sources: perplexityCitations.length > 0 ? perplexityCitations : scored.cited_sources,
-            share_of_model_score: scored.share_of_model_score,
-            // Denormalised fields stamped at insert time to avoid joins in downstream queries
-            query_intent: query.intent,
-            citation_present: perplexityCitations.length > 0 || (Array.isArray(scored.cited_sources) && scored.cited_sources.length > 0),
-            // version_id stamped from the active portfolio_versions record fetched before the loop.
-            version_id: versionId,
-          })
-          .select()
-          .single();
-
-        if (insertError) {
-          console.error("[runner] Insert error:", insertError.message);
-        } else {
-          modelRunsCreated++;
-
-          // For validation queries anchored to a brand fact, run secondary Haiku scoring.
-          // Applied forward only — historical runs are not retroactively scored.
-          if (query.intent === "validation" && query.fact_id && insertedRun) {
-            const fact = factMap.get(query.fact_id);
-            if (fact) {
-              // ── Knowledge scoring (Haiku) ──────────────────────────────────
-              let ks;
-              try {
-                ks = await withTimeout(
-                  scoreKnowledge(query.text, rawResponse, fact),
-                  45_000,
-                  `haiku-scorer query=${query.id}`
-                );
-
-                // bait_triggered: the bait worked — LLM confirmed a false claim.
-                // NOTE: in our scorer, accuracy "incorrect" on a bait query means the LLM
-                // confirmed the false claim (NOT "correct"). The doc had this inverted.
-                const bait_triggered = (query.is_bait === true) && (ks.accuracy === "incorrect");
-
-                const { error: ksInsertError } = await supabase.from("brand_knowledge_scores").insert({
-                  tracking_run_id: insertedRun.id,
-                  fact_id: fact.id,
-                  client_id: clientId,
-                  accuracy: ks.accuracy,
-                  completeness: ks.completeness,
-                  hallucination: ks.hallucination,
-                  notes: ks.notes,
-                  scorer_model: ks.scorer_model,
-                  bait_triggered,
-                  brand_positioning: ks.brand_positioning,
-                  version_id: versionId,
-                });
-                if (ksInsertError) {
-                  console.error(
-                    `[runner] brand_knowledge_scores insert failed model=${model} query=${query.id}: ${ksInsertError.message}`
-                  );
-                }
-
-                // Write brand_positioning back to tracking_run as well so it's available
-                // without joining brand_knowledge_scores in Coverage by Category queries.
-                const { error: bpUpdateError } = await supabase
-                  .from("tracking_runs")
-                  .update({ brand_positioning: ks.brand_positioning })
-                  .eq("id", insertedRun.id);
-                if (bpUpdateError) {
-                  console.error(
-                    `[runner] brand_positioning update failed model=${model} query=${query.id}: ${bpUpdateError.message}`
-                  );
-                }
-              } catch (err) {
-                console.error(
-                  `[runner] Knowledge scoring failed model=${model} query=${query.id}: ${err instanceof Error ? err.message : String(err)}`
-                );
-              }
-
-              // ── Source Intelligence enrichment call ────────────────────────
-              // ENRICHMENT_ENABLED=true re-activates this block. Currently disabled:
-              // source_attribution / content_age_estimate / competitor_mentions_unprompted
-              // are not yet surfaced in the dashboard, so running 36+ extra primary-model
-              // calls per tracking run is pure cost/time waste at this stage.
-              // When the Source Intelligence dashboard panels are built, flip the flag.
-              if (process.env.ENRICHMENT_ENABLED === "true") {
-                try {
-                  const enrichPrompt = buildEnrichmentPrompt(query.text, rawResponse, brandName);
-                  const enrichRaw = await withTimeout(
-                    LLM_CALLERS[model](enrichPrompt),
-                    45_000,
-                    `${model} enrichment query=${query.id}`
-                  );
-
-                  let enriched = parseEnrichmentJson(enrichRaw, model, query.id);
-
-                  if (!enriched) {
-                    const retryPrompt =
-                      enrichPrompt +
-                      "\n\nReturn raw JSON only. No markdown, no code blocks, no explanation.";
-                    const retryRaw = await withTimeout(
-                      LLM_CALLERS[model](retryPrompt),
-                      45_000,
-                      `${model} enrichment-retry query=${query.id}`
-                    );
-                    enriched = parseEnrichmentJson(retryRaw, model, `${query.id}/retry`);
-                    if (!enriched) {
-                      console.error(
-                        `[runner] enrichment skipped after retry model=${model} query=${query.id}`
-                      );
-                    }
-                  }
-
-                  if (enriched) {
-                    await supabase
-                      .from("tracking_runs")
-                      .update({
-                        source_attribution: enriched.sources,
-                        content_age_estimate: enriched.content_age,
-                        competitor_mentions_unprompted: enriched.competitor_mentions,
-                      })
-                      .eq("id", insertedRun.id);
-                  }
-                } catch (err) {
-                  console.error(
-                    `[runner] Enrichment call failed model=${model} query=${query.id}: ${err instanceof Error ? err.message : String(err)}`
-                  );
-                }
-              }
-            }
-          }
-
-          // ── Competitive mention extraction (Haiku) ────────────────────────
-          // Runs on problem_aware, category, and comparative — all three intents where
-          // organic brand mentions are meaningful. Validation is still excluded
-          // (Beko-framed prompts; competitors are named explicitly, not discovered).
-          if ((query.intent === "problem_aware" || query.intent === "category" || query.intent === "comparative") && insertedRun) {
-            try {
-              const extractionPrompt = buildExtractionPrompt(query.text, rawResponse);
-              const extractionRaw = await withTimeout(
-                callHaiku(extractionPrompt),
-                10_000,
-                `haiku-extraction query=${query.id}`
-              );
-
-              const brands = parseExtractionJson(extractionRaw, query.id);
-              if (brands && brands.length > 0) {
-                const rows = brands.map((b) => ({
-                  tracking_run_id: insertedRun.id,
-                  query_id: query.id,
-                  client_id: clientId,
-                  model,
-                  query_intent: query.intent,
-                  brand_name_raw: b.brand,
-                  brand_name: normaliseBrandName(b.brand),
-                  is_tracked_brand:
-                    normaliseBrandName(b.brand).toLowerCase() === brandName.toLowerCase(),
-                  mention_context: b.context,
-                  mention_sentiment: b.sentiment,
-                  version_id: versionId,
-                }));
-
-                const { error: mentionInsertError } = await supabase
-                  .from("response_brand_mentions")
-                  .insert(rows);
-                if (mentionInsertError) {
-                  console.error(
-                    `[runner] response_brand_mentions insert failed model=${model} query=${query.id}: ${mentionInsertError.message}`
-                  );
-                }
-
-                // Log unmatched brand names so the normalisation map can be extended
-                const unmatched = brands
-                  .map((b) => b.brand)
-                  .filter((raw) => !BRAND_NORMALISATION_MAP[raw.toLowerCase().trim()]);
-                if (unmatched.length > 0) {
-                  console.log("[brand-normaliser] Unmatched brands (add to map):", unmatched);
-                }
-              }
-            } catch (err) {
-              // Non-critical — log and continue; do not fail the run
-              console.error(
-                `[runner] Brand extraction failed model=${model} query=${query.id}: ${err instanceof Error ? err.message : String(err)}`
-              );
-            }
-          }
-
-          // ── Brand mention fallback scan ────────────────────────────────────
-          // The scorer uses an exact substring match against the stored brand_name,
-          // which can silently miss the brand if brand_name has surrounding whitespace
-          // or if the brand appears in a list/passing reference the structured
-          // extraction step skipped. If scorer said false, re-check with a trimmed
-          // case-insensitive scan and correct both tracking_runs and response_brand_mentions.
-          if (!scored.brand_mentioned && insertedRun) {
-            const foundByFallback = rawResponse
-              .toLowerCase()
-              .includes(brandName.toLowerCase().trim());
-
-            if (foundByFallback) {
-              // Correct the tracking_run record
-              const { error: updateErr } = await supabase
-                .from("tracking_runs")
-                .update({ brand_mentioned: true })
-                .eq("id", insertedRun.id);
-              if (updateErr) {
-                console.error(
-                  `[runner] fallback brand_mentioned update failed model=${model} query=${query.id}: ${updateErr.message}`
-                );
-              } else {
-                // Keep the in-memory scored value in sync so the summary counter is correct
-                scored.brand_mentioned = true;
-
-                // Insert a response_brand_mentions row only if extraction didn't already
-                // create one for this run (avoids duplicate is_tracked_brand rows)
-                const { count: existingCount } = await supabase
-                  .from("response_brand_mentions")
-                  .select("id", { count: "exact", head: true })
-                  .eq("tracking_run_id", insertedRun.id)
-                  .eq("is_tracked_brand", true);
-
-                if ((existingCount ?? 0) === 0) {
-                  const { error: rbmErr } = await supabase
-                    .from("response_brand_mentions")
-                    .insert({
-                      tracking_run_id: insertedRun.id,
-                      query_id: query.id,
-                      client_id: clientId,
-                      model,
-                      query_intent: query.intent,
-                      brand_name_raw: brandName,
-                      brand_name: normaliseBrandName(brandName),
-                      is_tracked_brand: true,
-                      mention_context: "Detected by fallback string scan",
-                      mention_sentiment: "unclear",
-                      version_id: versionId,
-                    });
-                  if (rbmErr) {
-                    console.error(
-                      `[runner] fallback response_brand_mentions insert failed model=${model} query=${query.id}: ${rbmErr.message}`
-                    );
-                  }
-                }
-              }
-            }
-          }
-        }
-
-        if (scored.brand_mentioned && scored.mention_sentiment !== "negative") {
-          modelMentioned++;
-        } else {
-          modelMissed.push(query.text);
-        }
-
-        scored.competitors_mentioned.forEach((name) => {
-          modelCompetitorCounts[name] = (modelCompetitorCounts[name] ?? 0) + 1;
-        });
-      }
-
-      return {
-        runsCreated: modelRunsCreated,
-        mentioned: modelMentioned,
-        missedQueryTexts: modelMissed,
-        competitorCounts: modelCompetitorCounts,
-      };
-    })
-  );
-
-  // Merge per-model results into the shared summary
   let runsCreated = 0;
   const competitorCounts: Record<string, number> = {};
 
-  for (const [idx, result] of modelResults.entries()) {
-    const model = selectedModels[idx];
+  for (const result of modelResults) {
     runsCreated += result.runsCreated;
     runSummary.queriesWithMention += result.mentioned;
-    runSummary.byModel[model] = { total: queries.length, mentioned: result.mentioned };
+    runSummary.byModel[result.model] = { total: queryCount, mentioned: result.mentioned };
     // Deduplicate missed queries across models — only record each query text once
     result.missedQueryTexts.forEach((t) => {
       if (!runSummary.missedQueries.includes(t)) runSummary.missedQueries.push(t);
@@ -636,7 +670,6 @@ export async function runTrackingForClient(
     .slice(0, 5)
     .map(([name]) => name);
 
-  // ── 5. Generate recommendations ───────────────────────────────────────────
   try {
     await generateRecommendations(clientId, brandName, runSummary);
   } catch (err) {
@@ -645,4 +678,17 @@ export async function runTrackingForClient(
   }
 
   return { runsCreated };
+}
+
+// ── Thin orchestrator (kept for backwards-compat / direct testing) ─────────────
+
+export async function runTrackingForClient(
+  clientId: string
+): Promise<{ runsCreated: number }> {
+  const ctx = await fetchRunContext(clientId);
+  // Models run in parallel — same behaviour as before, just now composable as steps
+  const modelResults = await Promise.all(
+    ctx.selectedModels.map((model) => runModelBatch(ctx, model))
+  );
+  return finaliseRun(clientId, ctx.brandName, ctx.queries.length, modelResults);
 }

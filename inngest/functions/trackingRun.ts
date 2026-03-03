@@ -1,5 +1,5 @@
 import { inngest } from "@/inngest/client";
-import { runTrackingForClient } from "@/lib/tracking/runner";
+import { fetchRunContext, runModelBatch, finaliseRun } from "@/lib/tracking/runner";
 import { clusterGapsForClient } from "@/lib/tracking/gap-clusterer";
 
 export const trackingRunFunction = inngest.createFunction(
@@ -17,8 +17,23 @@ export const trackingRunFunction = inngest.createFunction(
   async ({ event, step }) => {
     const { clientId } = event.data as { clientId: string };
 
-    const result = await step.run("execute-tracking", () =>
-      runTrackingForClient(clientId)
+    // Step 1: Fetch client context — queries, competitors, facts, active version.
+    // Stored as Inngest state so subsequent steps don't need to re-query the DB.
+    const ctx = await step.run("setup", () => fetchRunContext(clientId));
+
+    // Steps 2-N: One step per model — each runs independently with its own timeout.
+    // Promise.all fans out to parallel Inngest steps; the function suspends and
+    // resumes as each completes. Previously all models ran inside a single step
+    // ("execute-tracking"), which timed out at 5 minutes for a full portfolio run.
+    const modelResults = await Promise.all(
+      ctx.selectedModels.map((model) =>
+        step.run(`model-${model}`, () => runModelBatch(ctx, model))
+      )
+    );
+
+    // Step N+1: Merge per-model tallies and generate AI recommendations.
+    const result = await step.run("finalise", () =>
+      finaliseRun(clientId, ctx.brandName, ctx.queries.length, modelResults)
     );
 
     // Non-critical post-run step: cluster gap queries into named findings.
