@@ -47,7 +47,7 @@ export async function POST(request: Request) {
     // Soft-deactivate existing queries rather than hard-deleting them.
     // Historical tracking_runs still reference these query rows via query_id, so hard
     // deletion would orphan them. Soft-delete preserves the historical data chain.
-    await supabase
+    const { error: deactivateError } = await supabase
       .from("queries")
       .update({
         status:                "inactive",
@@ -57,24 +57,37 @@ export async function POST(request: Request) {
       .eq("client_id", clientId)
       .in("status", ["pending_approval", "active"]);
 
+    if (deactivateError) {
+      console.error("[queries/generate] Failed to deactivate existing queries:", deactivateError.message, { clientId, versionId });
+    }
+
     const { data: inserted, error: insertError } = await supabase
       .from("queries")
       .insert(queries.map((q) => ({ ...q, client_id: clientId, status: "pending_approval", version_id: versionId })))
       .select();
 
+    // Check insert error before the version count update so we don't stamp a wrong count
+    if (insertError) {
+      console.error("[queries/generate] Failed to insert new queries:", insertError.message, { clientId, versionId, queryCount: queries.length });
+      throw new Error(`DB insert error: ${insertError.message}`);
+    }
+
     // Update the version row with the accurate post-insert query count
     if (inserted?.length) {
-      await supabase
+      const { error: versionUpdateError } = await supabase
         .from("portfolio_versions")
         .update({ query_count: inserted.length })
         .eq("id", versionId);
-    }
 
-    if (insertError) throw new Error(`DB insert error: ${insertError.message}`);
+      if (versionUpdateError) {
+        console.error("[queries/generate] Failed to update portfolio_versions query_count:", versionUpdateError.message, { versionId, count: inserted.length });
+      }
+    }
 
     return NextResponse.json({ queries: inserted });
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : "Unknown error";
+    console.error("[queries/generate] Unhandled error:", message);
     return NextResponse.json({ error: message }, { status: 500 });
   }
 }
