@@ -361,6 +361,25 @@ export async function runModelBatch(ctx: RunContext, model: LLMModel): Promise<M
       await new Promise((r) => setTimeout(r, 1_500));
     }
 
+    // Dedup guard: skip if a tracking_run already exists for this query+model today.
+    // Inngest retries a step from the top when a transient error mid-loop; without
+    // this check, already-inserted rows get duplicated on every retry.
+    // Use UTC date bounds so the check is timezone-consistent with DB timestamps.
+    const todayUTC = new Date().toISOString().slice(0, 10);
+    const tomorrowUTC = new Date(Date.now() + 86_400_000).toISOString().slice(0, 10);
+    const { count: existingCount } = await supabase
+      .from("tracking_runs")
+      .select("id", { count: "exact", head: true })
+      .eq("query_id", query.id)
+      .eq("client_id", clientId)
+      .eq("model", model)
+      .gte("created_at", `${todayUTC}T00:00:00.000Z`)
+      .lt("created_at", `${tomorrowUTC}T00:00:00.000Z`);
+    if ((existingCount ?? 0) > 0) {
+      console.log(`[runner] dedup skip query=${query.id} model=${model} — row exists for ${todayUTC}`);
+      continue;
+    }
+
     let rawResponse = "";
     // Perplexity returns a native citations array in the API response alongside
     // the message content. Capture it here so cited_sources reflects the
