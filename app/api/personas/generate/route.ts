@@ -3,6 +3,8 @@ import { createClient } from "@/lib/supabase/server";
 import { generatePersonas } from "@/lib/synthetic-buyer/persona-generator";
 import type { ClientContext } from "@/types";
 
+export const maxDuration = 60;
+
 export async function POST(request: Request) {
   try {
     const supabase = await createClient();

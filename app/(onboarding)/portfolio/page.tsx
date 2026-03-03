@@ -1256,24 +1256,17 @@ function PortfolioInner() {
         .eq("status", "active");
 
       if ((count ?? 0) === 0) {
-        // No pre-seeded queries: generate the portfolio and promote to active
-        await fetch("/api/queries/generate", {
+        // No queries yet (background generate from discover timed out or failed).
+        // generate/route inserts as 'active' and also activates the client — but we've
+        // already set status above so the client is covered either way.
+        const genRes = await fetch("/api/queries/generate", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ clientId }),
         });
-        await supabase
-          .from("queries")
-          .update({ status: "active" })
-          .eq("client_id", clientId)
-          .eq("status", "pending_approval");
-      } else {
-        // Pre-seeded account: activate any pending queries from the current session
-        const activeQueryIds = queries
-          .filter((q) => q.status !== "removed")
-          .map((q) => q.id);
-        if (activeQueryIds.length > 0) {
-          await supabase.from("queries").update({ status: "active" }).in("id", activeQueryIds);
+        if (!genRes.ok) {
+          const { error } = await genRes.json().catch(() => ({}));
+          throw new Error(error ?? "Query generation failed");
         }
       }
 

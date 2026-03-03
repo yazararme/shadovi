@@ -4,6 +4,10 @@ import { generateQueries } from "@/lib/synthetic-buyer/query-generator";
 import { createPortfolioVersion } from "@/lib/versioning/create-version";
 import type { ClientContext, BrandFact, VersionTrigger } from "@/types";
 
+// Two sequential Claude calls (generate + critic) can take 60-90s on large brand contexts.
+// Without this, Vercel defaults to 10s (Hobby) or 60s (Pro) and silently kills the route.
+export const maxDuration = 120;
+
 export async function POST(request: Request) {
   try {
     const supabase = await createClient();

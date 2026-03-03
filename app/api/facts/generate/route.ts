@@ -3,6 +3,8 @@ import { createClient } from "@/lib/supabase/server";
 import { callHaiku } from "@/lib/llm/anthropic";
 import type { BrandDNA, BrandFactCategory } from "@/types";
 
+export const maxDuration = 60;
+
 const PROMPT = (dna: BrandDNA, rawScrape?: string) => `You are a brand strategist building a fact verification set for an AEO (Answer Engine Optimization) platform.
 
 Given the following brand context, generate a JSON array of brand facts to be used for testing how well AI models know this brand.
