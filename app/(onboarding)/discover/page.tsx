@@ -260,6 +260,10 @@ function DiscoverPageInner() {
 
   return (
     <div className="max-w-2xl mx-auto">
+      {/* Step indicator */}
+      <p className="text-[11px] text-[#9CA3AF] font-mono mb-8 text-right">
+        Step 1 of 5 — Discover
+      </p>
       {/* Page header */}
       <div className="text-center mb-10">
         <h1 className="font-serif text-[32px] font-semibold text-[#0D0437] tracking-tight leading-tight">

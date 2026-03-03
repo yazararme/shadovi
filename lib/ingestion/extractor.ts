@@ -39,7 +39,7 @@ Analyze this website content and extract the following as structured JSON:
 Field guidance:
 - use_cases: specific problems a buyer would articulate, not product features
 - industries_served: specific verticals, not generic ("B2B SaaS" is too broad)
-- likely_competitors: brand names only, infer from positioning
+- likely_competitors: brand names only, infer from positioning. IMPORTANT: prioritise direct competitors of similar scale and market position — brands the client is realistically winning or losing deals against. Exclude dominant global category leaders (e.g. Unilever, P&G, Wise, Stripe) unless the website explicitly positions against them. Aim for 4-6 competitors that a buyer would genuinely consider as alternatives to this specific brand.
 - differentiators: what makes this brand distinct from category alternatives
 - strategic_battlegrounds: 3-5 specific competitive contexts where this brand should be winning
   the AI narrative (e.g. "compliance-first vs flexibility tradeoff", "SMB pricing vs enterprise",

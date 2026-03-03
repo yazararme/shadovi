@@ -171,7 +171,7 @@ interface DrawerState {
 // ── Main component ─────────────────────────────────────────────────────────────
 
 function OverviewInner() {
-  const { activeClientId: clientIdParam } = useClientContext();
+  const { activeClientId: clientIdParam, isAdmin } = useClientContext();
 
   // Client
   const [client, setClient] = useState<Client | null>(null);
@@ -204,7 +204,6 @@ function OverviewInner() {
   // UI state
   const [running, setRunning] = useState(false);
   const [drawer, setDrawer] = useState<DrawerState | null>(null);
-  const [isAdmin, setIsAdmin] = useState(false);
 
   // ── Load data ──────────────────────────────────────────────────────────────
 
@@ -214,12 +213,6 @@ function OverviewInner() {
     async function loadClient() {
       setClientLoading(true);
       const supabase = createClient();
-
-      // Check admin status — bypasses daily run limit for the admin account
-      const { data: { user } } = await supabase.auth.getUser();
-      if (user?.email && process.env.NEXT_PUBLIC_ADMIN_EMAIL) {
-        setIsAdmin(user.email === process.env.NEXT_PUBLIC_ADMIN_EMAIL);
-      }
 
       const q = supabase.from("clients").select("*").eq("status", "active");
       const { data } = await (clientIdParam ? q.eq("id", clientIdParam) : q)
@@ -400,21 +393,21 @@ function OverviewInner() {
         setCompetitorRateLoading(false);
       })();
 
-      // BVI — needs 3 joins (scores, facts, run→model). Own lightweight parallel fetch.
+      // BVI — 3 parallel fetches, all scoped to active version for consistency with other metrics.
       (async () => {
+        let bviScoresQ = supabase2
+          .from("brand_knowledge_scores")
+          .select("fact_id, bait_triggered, tracking_run_id")
+          .eq("client_id", c.id);
+        if (activeVersionId) bviScoresQ = bviScoresQ.eq("version_id", activeVersionId);
+
+        let bviRunsQ = supabase2.from("tracking_runs").select("id, model").eq("client_id", c.id);
+        if (activeVersionId) bviRunsQ = bviRunsQ.eq("version_id", activeVersionId);
+
         const [{ data: bviScores }, { data: bviFacts }, { data: bviRunModels }] = await Promise.all([
-          supabase2
-            .from("brand_knowledge_scores")
-            .select("fact_id, bait_triggered, tracking_run_id")
-            .eq("client_id", c.id),
-          supabase2
-            .from("brand_facts")
-            .select("id, is_true, claim")
-            .eq("client_id", c.id),
-          supabase2
-            .from("tracking_runs")
-            .select("id, model")
-            .eq("client_id", c.id),
+          bviScoresQ,
+          supabase2.from("brand_facts").select("id, is_true, claim").eq("client_id", c.id),
+          bviRunsQ,
         ]);
         if (cancelled) return;
 

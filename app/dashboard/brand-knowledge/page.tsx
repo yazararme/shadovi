@@ -4,8 +4,7 @@ import React, { useEffect, useState, Suspense } from "react";
 import { useClientContext } from "@/context/ClientContext";
 import { createClient } from "@/lib/supabase/client";
 import { Skeleton } from "@/components/ui/skeleton";
-import { AlertTriangle, ChevronDown, ChevronUp, ArrowRight } from "lucide-react";
-import Link from "next/link";
+import { ChevronDown, ChevronUp, ArrowRight } from "lucide-react";
 import type {
   Client,
   LLMModel,
@@ -41,6 +40,29 @@ interface FactModelGroup {
   representativeRun: EnrichedScore;
   isMixedBait: boolean;
   baitTriggeredCount: number;
+}
+
+interface ModelEntry {
+  model: LLMModel;
+  runs: EnrichedScore[];
+  total: number;
+  correctCount: number;
+  hallucinatedCount: number;
+  baitTriggeredCount: number;
+}
+
+interface FactGroup {
+  key: string;           // fact_id ?? fact_claim — stable row key
+  fact_id: string | null;
+  fact_claim: string;
+  fact_category: BrandFactCategory;
+  fact_is_true: boolean;
+  models: ModelEntry[];
+  totalRuns: number;
+  totalCorrect: number;
+  totalHallucinations: number;
+  totalBaitTriggered: number;
+  accuracyPct: number;   // pre-computed for sort
 }
 
 interface AlertFactGroup {
@@ -106,6 +128,57 @@ function SubLabel({ children }: { children: React.ReactNode }) {
 }
 
 const ALERT_CATEGORIES: BrandFactCategory[] = ["feature", "market", "pricing", "messaging"];
+
+function buildFactGroups(scores: EnrichedScore[]): FactGroup[] {
+  // Group by fact_id first, then by model within each fact
+  const factMap = new Map<string, Map<LLMModel, EnrichedScore[]>>();
+  const factMeta = new Map<string, Pick<EnrichedScore, "fact_claim" | "fact_category" | "fact_is_true" | "fact_id">>();
+
+  for (const s of scores) {
+    const fKey = s.fact_id ?? s.fact_claim;
+    if (!factMap.has(fKey)) {
+      factMap.set(fKey, new Map());
+      factMeta.set(fKey, {
+        fact_id: s.fact_id,
+        fact_claim: s.fact_claim,
+        fact_category: s.fact_category,
+        fact_is_true: s.fact_is_true,
+      });
+    }
+    const modelMap = factMap.get(fKey)!;
+    const arr = modelMap.get(s.model) ?? [];
+    arr.push(s);
+    modelMap.set(s.model, arr);
+  }
+
+  return Array.from(factMap.entries()).map(([fKey, modelMap]) => {
+    const meta = factMeta.get(fKey)!;
+    const models: ModelEntry[] = Array.from(modelMap.entries()).map(([model, runs]) => ({
+      model,
+      runs,
+      total: runs.length,
+      correctCount: runs.filter((r) => r.accuracy === "correct").length,
+      hallucinatedCount: runs.filter((r) => r.hallucination || r.bait_triggered).length,
+      baitTriggeredCount: runs.filter((r) => r.bait_triggered).length,
+    }));
+
+    const totalRuns = models.reduce((s, m) => s + m.total, 0);
+    const totalCorrect = models.reduce((s, m) => s + m.correctCount, 0);
+    const totalHallucinations = models.reduce((s, m) => s + m.hallucinatedCount, 0);
+    const totalBaitTriggered = models.reduce((s, m) => s + m.baitTriggeredCount, 0);
+
+    return {
+      key: fKey,
+      ...meta,
+      models,
+      totalRuns,
+      totalCorrect,
+      totalHallucinations,
+      totalBaitTriggered,
+      accuracyPct: totalRuns > 0 ? totalCorrect / totalRuns : 1,
+    };
+  });
+}
 
 function buildCategoryTree(alertGroups: FactModelGroup[]): AlertCategoryGroup[] {
   const catMap = new Map<BrandFactCategory, Map<string, FactModelGroup[]>>();
@@ -196,6 +269,16 @@ function BrandKnowledgeInner() {
   const [loading, setLoading] = useState(true);
   const [expandedAlerts, setExpandedAlerts] = useState<Set<string>>(new Set());
   const [expandedTableGroups, setExpandedTableGroups] = useState<Set<string>>(new Set());
+  const [expandedFacts, setExpandedFacts] = useState<Set<string>>(new Set());
+  const [expandedFactModels, setExpandedFactModels] = useState<Set<string>>(new Set());
+  const [expandedRunResponses, setExpandedRunResponses] = useState<Set<string>>(new Set());
+  const [catFilter, setCatFilter] = useState<BrandFactCategory[] | null>(null);  // null = show all
+  const [modelFilter, setModelFilter] = useState<LLMModel[] | null>(null);       // null = show all
+  const [tableHighlighted, setTableHighlighted] = useState(false);
+  // Level 3→4 expand in Hallucination Alerts: keyed by run.id
+  const [expandedAlertRuns, setExpandedAlertRuns] = useState<Set<string>>(new Set());
+  // "Show full response" within Level 4: keyed by run.id
+  const [expandedAlertFullResponses, setExpandedAlertFullResponses] = useState<Set<string>>(new Set());
 
   function toggleAlert(key: string) {
     setExpandedAlerts((prev) => {
@@ -213,7 +296,98 @@ function BrandKnowledgeInner() {
     });
   }
 
+  function toggleFact(key: string) {
+    setExpandedFacts((prev) => {
+      const next = new Set(prev);
+      next.has(key) ? next.delete(key) : next.add(key);
+      return next;
+    });
+  }
+
+  function toggleFactModel(key: string) {
+    setExpandedFactModels((prev) => {
+      const next = new Set(prev);
+      next.has(key) ? next.delete(key) : next.add(key);
+      return next;
+    });
+  }
+
+  function toggleRunResponse(id: string) {
+    setExpandedRunResponses((prev) => {
+      const next = new Set(prev);
+      next.has(id) ? next.delete(id) : next.add(id);
+      return next;
+    });
+  }
+
+  function toggleAlertRun(id: string) {
+    setExpandedAlertRuns((prev) => {
+      const next = new Set(prev);
+      next.has(id) ? next.delete(id) : next.add(id);
+      return next;
+    });
+  }
+
+  function toggleAlertFullResponse(id: string) {
+    setExpandedAlertFullResponses((prev) => {
+      const next = new Set(prev);
+      next.has(id) ? next.delete(id) : next.add(id);
+      return next;
+    });
+  }
+
+  // ── Filter helpers ─────────────────────────────────────────────────────────
+
+  function updateCatFilter(cats: BrandFactCategory[] | null) {
+    setCatFilter(cats);
+    const params = new URLSearchParams(window.location.search);
+    if (!cats) params.delete("category");
+    else params.set("category", cats.join(","));
+    window.history.replaceState(null, "", `?${params.toString()}`);
+  }
+
+  function updateModelFilter(models: LLMModel[] | null) {
+    setModelFilter(models);
+    const params = new URLSearchParams(window.location.search);
+    if (!models) params.delete("model");
+    else params.set("model", models.join(","));
+    window.history.replaceState(null, "", `?${params.toString()}`);
+  }
+
+  function toggleCatPill(cat: BrandFactCategory, available: BrandFactCategory[]) {
+    const current = catFilter ?? available;
+    const isActive = current.includes(cat);
+    if (isActive) {
+      const next = current.filter((c) => c !== cat);
+      // Deselecting the last pill → reset to all
+      updateCatFilter(next.length === 0 || next.length === available.length ? null : next);
+    } else {
+      const next = [...current, cat];
+      updateCatFilter(next.length === available.length ? null : next);
+    }
+  }
+
+  function toggleModelPill(model: LLMModel, available: LLMModel[]) {
+    const current = modelFilter ?? available;
+    const isActive = current.includes(model);
+    if (isActive) {
+      const next = current.filter((m) => m !== model);
+      updateModelFilter(next.length === 0 || next.length === available.length ? null : next);
+    } else {
+      const next = [...current, model];
+      updateModelFilter(next.length === available.length ? null : next);
+    }
+  }
+
   useEffect(() => {
+    // Read URL filter params and apply on load / client switch
+    const params = new URLSearchParams(
+      typeof window !== "undefined" ? window.location.search : ""
+    );
+    const urlCats = params.get("category")?.split(",").filter(Boolean) as BrandFactCategory[] | undefined;
+    const urlModels = params.get("model")?.split(",").filter(Boolean) as LLMModel[] | undefined;
+    setCatFilter(urlCats?.length ? urlCats : null);
+    setModelFilter(urlModels?.length ? urlModels : null);
     loadData();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [clientIdParam]);
@@ -358,6 +532,32 @@ function BrandKnowledgeInner() {
     .sort((a, b) => b.hallucinatedCount - a.hallucinatedCount || b.total - a.total);
 
   const categoryTree = buildCategoryTree(alertGroups);
+
+  const factGroups = buildFactGroups(scores).sort((a, b) => {
+    if (b.totalHallucinations !== a.totalHallucinations)
+      return b.totalHallucinations - a.totalHallucinations;
+    return a.accuracyPct - b.accuracyPct; // worst accuracy first
+  });
+
+  // Available filter options — derived from actual data in factGroups
+  const availableCategories = Array.from(
+    new Set(
+      factGroups
+        .map((fg) => fg.fact_category)
+        .filter((c): c is BrandFactCategory => !!c && c in CATEGORY_LABELS)
+    )
+  );
+
+  const availableModels = Array.from(
+    new Set(factGroups.flatMap((fg) => fg.models.map((m) => m.model)))
+  ) as LLMModel[];
+
+  // Apply active filters to factGroups for the table
+  const visibleFactGroups = factGroups.filter((fg) => {
+    const catOk = catFilter === null || catFilter.includes(fg.fact_category);
+    const modelOk = modelFilter === null || fg.models.some((me) => modelFilter.includes(me.model));
+    return catOk && modelOk;
+  });
 
   // Category / model stats derived from mainScores only
   const CATEGORIES: BrandFactCategory[] = ["feature", "market", "pricing", "messaging"];
@@ -567,7 +767,16 @@ function BrandKnowledgeInner() {
           </thead>
           <tbody>
             {categoryStats.map(({ cat, total, correct, rate }) => (
-              <tr key={cat} className="border-b last:border-0">
+              <tr
+                key={cat}
+                className="border-b last:border-0 cursor-pointer hover:bg-[rgba(244,246,249,0.7)] transition-colors"
+                onClick={() => {
+                  updateCatFilter([cat]);
+                  document.getElementById("all-scored-runs")?.scrollIntoView({ behavior: "smooth" });
+                  setTableHighlighted(true);
+                  setTimeout(() => setTableHighlighted(false), 1200);
+                }}
+              >
                 <td className="px-4 py-3 font-bold text-[13px] text-[#0D0437]">
                   {CATEGORY_LABELS[cat]}
                 </td>
@@ -583,14 +792,17 @@ function BrandKnowledgeInner() {
                   )}
                 </td>
                 <td className="px-4 py-3 w-32">
-                  <div className="h-1.5 w-full bg-[#E2E8F0] rounded-full overflow-hidden">
-                    <div
-                      className="h-full rounded-full"
-                      style={{
-                        width: `${rate ?? 0}%`,
-                        backgroundColor: accuracyColor(rate ?? 0),
-                      }}
-                    />
+                  <div className="flex items-center gap-2">
+                    <div className="flex-1 h-1.5 bg-[#E2E8F0] rounded-full overflow-hidden">
+                      <div
+                        className="h-full rounded-full"
+                        style={{
+                          width: `${rate ?? 0}%`,
+                          backgroundColor: accuracyColor(rate ?? 0),
+                        }}
+                      />
+                    </div>
+                    <ArrowRight className="h-3 w-3 text-[#9CA3AF] shrink-0" />
                   </div>
                 </td>
               </tr>
@@ -699,7 +911,7 @@ function BrandKnowledgeInner() {
         </table>
       </div>
 
-      {/* Hallucination Alerts — 3-level: Category → Fact → LLM → Variants */}
+      {/* Hallucination Alerts — 4-level: Category → Claim → Model → Query → Response */}
       {alertGroups.length > 0 && (
         <>
           <div id="bvi-alerts" />
@@ -707,7 +919,7 @@ function BrandKnowledgeInner() {
           <div className="space-y-8 mb-6">
             {categoryTree.map((catGroup) => (
               <div key={catGroup.category}>
-                {/* Category header */}
+                {/* Category header — unchanged */}
                 <div className="flex items-center gap-3 mb-3">
                   <span className="text-[10px] font-bold uppercase tracking-[2.5px] text-[#0D0437]">
                     {catGroup.label}
@@ -718,131 +930,175 @@ function BrandKnowledgeInner() {
                   <div className="flex-1 h-px bg-[#E2E8F0]" />
                 </div>
 
-                {/* Fact/claim cards */}
+                {/* Level 1: Claim cards */}
                 <div className="space-y-3">
                   {catGroup.facts.map((factGroup) => (
                     <div
                       key={factGroup.fact_id ?? factGroup.fact_claim}
-                      className="border border-[rgba(255,75,110,0.15)] rounded-lg overflow-hidden"
+                      className="border border-[#E2E8F0] rounded-lg overflow-hidden bg-white"
+                      style={{ borderLeft: "3px solid #0D0437" }}
                     >
                       {/* Claim header */}
-                      <div className="px-4 py-3 bg-[rgba(255,75,110,0.03)] border-b border-[rgba(255,75,110,0.1)] flex items-start gap-2">
-                        <AlertTriangle className="h-3.5 w-3.5 text-[#FF4B6E] shrink-0 mt-0.5" />
-                        <div className="flex-1 min-w-0">
-                          <p className="text-[12px] font-bold text-[#0D0437] leading-snug">
-                            {factGroup.fact_claim}
-                          </p>
-                          {/* fact_is_true=false means this is a deliberately false claim used as bait */}
-                          {!factGroup.fact_is_true && (
-                            <span className="inline-block mt-1 text-[9px] font-bold uppercase tracking-wide px-1.5 py-0.5 rounded border bg-[rgba(123,94,167,0.08)] text-[#7B5EA7] border-[rgba(123,94,167,0.2)]">
-                              FALSE CLAIM
-                            </span>
-                          )}
-                        </div>
+                      <div className="px-4 py-3">
+                        <p className="text-[13px] font-bold text-[#0D0437] leading-snug">
+                          {factGroup.fact_claim}
+                        </p>
+                        {/* fact_is_true=false means this is a deliberately false claim used as bait */}
+                        {!factGroup.fact_is_true && (
+                          <span className="inline-block mt-1 text-[9px] font-bold uppercase tracking-wide px-1.5 py-0.5 rounded border bg-[rgba(123,94,167,0.08)] text-[#7B5EA7] border-[rgba(123,94,167,0.2)]">
+                            FALSE CLAIM
+                          </span>
+                        )}
+                        <p className="text-[11px] text-[#9CA3AF] mt-1.5">
+                          {factGroup.models.length} model{factGroup.models.length !== 1 ? "s" : ""} tested
+                          {" · "}
+                          {factGroup.totalHallucinations} hallucination{factGroup.totalHallucinations !== 1 ? "s" : ""}
+                        </p>
                       </div>
 
-                      {/* LLM rows */}
-                      <div className="divide-y divide-[#E2E8F0] bg-white">
-                        {factGroup.models.map((group) => {
+                      {/* Level 2: Model rows — attached directly below claim header */}
+                      <div className="border-t border-[#E2E8F0] divide-y divide-[#E2E8F0]">
+                        {factGroup.models.map((group, idx) => {
+                          const isLast = idx === factGroup.models.length - 1;
                           const isExpanded = expandedAlerts.has(group.key);
                           const modelAccRate =
                             group.total > 0
                               ? Math.round((group.correctCount / group.total) * 100)
                               : 0;
-                          const rep = group.representativeRun;
 
                           return (
                             <div key={group.key}>
                               {group.isMixedBait && (
-                                <div className="px-4 py-2 bg-[rgba(245,158,11,0.08)] border-b border-[rgba(245,158,11,0.2)]">
+                                <div className="pl-4 pr-4 py-2 bg-[rgba(245,158,11,0.08)] border-b border-[rgba(245,158,11,0.2)]">
                                   <p className="text-[10px] font-bold text-[#F59E0B]">
                                     Mixed bait/non-bait runs detected — failures represent distinct findings.
                                   </p>
                                 </div>
                               )}
 
-                              <div className="px-4 py-3 space-y-2">
-                                <div className="flex items-center gap-2 flex-wrap">
-                                  <span className="text-[9px] font-bold uppercase tracking-wide px-2 py-0.5 rounded border bg-[rgba(255,75,110,0.08)] text-[#FF4B6E] border-[rgba(255,75,110,0.2)]">
+                              {/* Model row with left-rail connector */}
+                              <div
+                                className="relative flex items-center gap-3 pl-4 pr-4 py-2.5 bg-[#F8F9FB] cursor-pointer hover:bg-[#f1f2f6] transition-colors"
+                                onClick={() => toggleAlert(group.key)}
+                              >
+                                {/* Vertical rail: full height for non-last rows, top-half only for last */}
+                                <div
+                                  className={`absolute left-2 top-0 w-px bg-[#E2E8F0] ${isLast ? "h-1/2" : "h-full"}`}
+                                />
+                                {/* Horizontal tick: 8px, at vertical midpoint */}
+                                <div className="absolute left-2 top-1/2 w-2 h-px bg-[#E2E8F0] -translate-y-px" />
+
+                                {/* Content — pl-4 puts it past the tick */}
+                                <div className="flex items-center gap-2 flex-1 flex-wrap">
+                                  <span className="text-[9px] font-bold uppercase tracking-wide px-1.5 py-0.5 rounded bg-[#EDEFF2] text-[#6B7280] border border-[#E2E8F0]">
                                     {MODEL_LABELS[group.model] ?? group.model}
                                   </span>
-                                  <span className="text-[9px] font-bold uppercase tracking-wide px-2 py-0.5 rounded border bg-[rgba(255,75,110,0.12)] text-[#FF4B6E] border-[rgba(255,75,110,0.2)]">
-                                    Failed {group.hallucinatedCount} of {group.total} variant{group.total !== 1 ? "s" : ""}
+                                  <span className="text-[9px] font-bold uppercase tracking-wide px-1.5 py-0.5 rounded border bg-[rgba(255,75,110,0.08)] text-[#FF4B6E] border-[rgba(255,75,110,0.2)]">
+                                    {group.hallucinatedCount} of {group.total} failed
                                   </span>
-                                  <span className={`text-[9px] font-bold uppercase tracking-wide px-2 py-0.5 rounded border ${accuracyBadgeClass(modelAccRate)}`}>
-                                    {modelAccRate}% accurate
+                                  <span className={`text-[9px] font-bold uppercase tracking-wide px-1.5 py-0.5 rounded border ${accuracyBadgeClass(modelAccRate)}`}>
+                                    {modelAccRate}%
                                   </span>
                                 </div>
-                                {rep.raw_response && (
-                                  <div className="p-3 bg-[#F4F6F9] border border-[#E2E8F0] rounded text-[11px] text-[#6B7280] leading-relaxed line-clamp-3">
-                                    {rep.raw_response.slice(0, 300)}
-                                    {rep.raw_response.length > 300 && "…"}
-                                  </div>
-                                )}
+                                <div className="flex-shrink-0 text-[#9CA3AF]">
+                                  {isExpanded
+                                    ? <ChevronUp className="h-3.5 w-3.5" />
+                                    : <ChevronDown className="h-3.5 w-3.5" />}
+                                </div>
                               </div>
 
-                              {/* Expand toggle */}
-                              <button
-                                onClick={() => toggleAlert(group.key)}
-                                className="w-full flex items-center gap-1.5 px-4 py-2 border-t border-[#E2E8F0] text-[10px] font-bold uppercase tracking-wide text-[#9CA3AF] hover:bg-[#F4F6F9] transition-colors"
-                              >
-                                {isExpanded ? (
-                                  <ChevronUp className="h-3 w-3" />
-                                ) : (
-                                  <ChevronDown className="h-3 w-3" />
-                                )}
-                                {isExpanded ? "Hide" : "View"} query variants ({group.total})
-                              </button>
-
-                              {/* Expanded query variants */}
+                              {/* Level 3: Query variants */}
                               {isExpanded && (
-                                <div className="border-t border-[#E2E8F0] bg-[rgba(244,246,249,0.5)]">
-                                  <div className="divide-y divide-[#E2E8F0]">
-                                    {group.runs.map((run) => (
-                                      <div key={run.id} className="px-6 py-2.5 space-y-1">
-                                        <div className="flex items-center gap-2 flex-wrap">
-                                          <span
-                                            className={`text-[9px] font-bold uppercase tracking-wide px-1.5 py-0.5 rounded border ${ACCURACY_STYLES[run.accuracy] ?? ""}`}
-                                          >
-                                            {run.accuracy}
-                                          </span>
-                                          {run.hallucination && !run.bait_triggered && (
-                                            <span className="text-[9px] font-bold uppercase tracking-wide px-1.5 py-0.5 rounded border bg-[rgba(255,75,110,0.08)] text-[#FF4B6E] border-[rgba(255,75,110,0.2)]">
-                                              hallucination
-                                            </span>
-                                          )}
-                                          {/* bait_triggered = LLM confirmed a false claim — clearer label than "bait triggered" */}
-                                          {run.bait_triggered && (
-                                            <span className="text-[9px] font-bold uppercase tracking-wide px-1.5 py-0.5 rounded border bg-[rgba(123,94,167,0.12)] text-[#7B5EA7] border-[rgba(123,94,167,0.2)]">
-                                              FALSE CLAIM CONFIRMED
-                                            </span>
+                                <div className="divide-y divide-[#ECEEF2] bg-white">
+                                  {group.runs.map((run, runIdx) => {
+                                    const isRunLast = runIdx === group.runs.length - 1;
+                                    const isRunExpanded = expandedAlertRuns.has(run.id);
+                                    const isFullShown = expandedAlertFullResponses.has(run.id);
+
+                                    return (
+                                      <div key={run.id}>
+                                        {/* Query variant row with Level 3 connector */}
+                                        <div
+                                          className={`relative flex items-start gap-3 pl-8 pr-4 py-2 transition-colors ${run.raw_response ? "cursor-pointer hover:bg-[#FAFAFA]" : ""}`}
+                                          onClick={() => { if (run.raw_response) toggleAlertRun(run.id); }}
+                                        >
+                                          {/* Level 3 vertical rail at x=24 (16px Level-2 zone + 8px offset) */}
+                                          <div
+                                            className={`absolute top-0 w-px bg-[#ECEEF2] ${isRunLast ? "h-1/2" : "h-full"}`}
+                                            style={{ left: "24px" }}
+                                          />
+                                          {/* Horizontal tick */}
+                                          <div
+                                            className="absolute h-px bg-[#ECEEF2]"
+                                            style={{ left: "24px", width: "8px", top: "50%" }}
+                                          />
+
+                                          {/* Run content — starts after pl-8 = 32px */}
+                                          <div className="flex-1 min-w-0 space-y-0.5">
+                                            <div className="flex items-center gap-1.5 flex-wrap">
+                                              <span className={`text-[9px] font-bold uppercase tracking-wide px-1.5 py-0.5 rounded border ${ACCURACY_STYLES[run.accuracy] ?? ""}`}>
+                                                {run.accuracy}
+                                              </span>
+                                              {run.hallucination && !run.bait_triggered && (
+                                                <span className="text-[9px] font-bold uppercase tracking-wide px-1.5 py-0.5 rounded border bg-[rgba(255,75,110,0.08)] text-[#FF4B6E] border-[rgba(255,75,110,0.2)]">
+                                                  hallucination
+                                                </span>
+                                              )}
+                                              {/* bait_triggered = LLM confirmed a false claim */}
+                                              {run.bait_triggered && (
+                                                <span className="text-[9px] font-bold uppercase tracking-wide px-1.5 py-0.5 rounded border bg-[rgba(123,94,167,0.08)] text-[#7B5EA7] border-[rgba(123,94,167,0.2)]">
+                                                  FALSE CLAIM CONFIRMED
+                                                </span>
+                                              )}
+                                            </div>
+                                            {run.query_text && (
+                                              <p className="text-[11px] text-[#6B7280] italic leading-snug">
+                                                &ldquo;{run.query_text}&rdquo;
+                                              </p>
+                                            )}
+                                          </div>
+
+                                          {/* Expand chevron for response — only shown when raw_response exists */}
+                                          {run.raw_response && (
+                                            <div className="flex-shrink-0 mt-0.5 text-[#9CA3AF]">
+                                              {isRunExpanded
+                                                ? <ChevronUp className="h-3 w-3" />
+                                                : <ChevronDown className="h-3 w-3" />}
+                                            </div>
                                           )}
                                         </div>
-                                        {run.query_text && (
-                                          <p className="text-[11px] text-[#6B7280] italic">
-                                            &ldquo;{run.query_text}&rdquo;
-                                          </p>
-                                        )}
-                                        {run.notes && (
-                                          <p className="text-[11px] text-[#9CA3AF]">{run.notes}</p>
-                                        )}
-                                      </div>
-                                    ))}
-                                  </div>
 
-                                  {/* Source intelligence deep-link — connects claim failures to source data */}
-                                  {group.fact_id && (
-                                    <div className="px-6 py-3 flex justify-end border-t border-[#E2E8F0]">
-                                      <Link
-                                        href={`/dashboard/source-intelligence?claim_fact_id=${group.fact_id}`}
-                                        className="flex items-center gap-1 text-[10px] font-bold uppercase tracking-wide text-[#7B5EA7] hover:text-[#6D28D9] transition-colors"
-                                        onClick={(e) => e.stopPropagation()}
-                                      >
-                                        Sources cited in queries testing this claim
-                                        <ArrowRight className="h-3 w-3" />
-                                      </Link>
-                                    </div>
-                                  )}
+                                        {/* Level 4: Response text — leaf node, no connector */}
+                                        {isRunExpanded && run.raw_response && (() => {
+                                          const lines = run.raw_response.split("\n");
+                                          const isTruncated = lines.length > 5;
+                                          const displayed = isTruncated && !isFullShown
+                                            ? lines.slice(0, 5).join("\n")
+                                            : run.raw_response;
+                                          return (
+                                            <div className="pl-12 pr-4 pb-2.5 space-y-1">
+                                              <pre className="text-[10px] text-[#6B7280] leading-relaxed whitespace-pre-wrap font-sans bg-[#F4F6F9] border border-[#E2E8F0] rounded p-2">
+                                                {displayed}
+                                                {isTruncated && !isFullShown && "…"}
+                                              </pre>
+                                              {isTruncated && (
+                                                <button
+                                                  type="button"
+                                                  onClick={(e) => { e.stopPropagation(); toggleAlertFullResponse(run.id); }}
+                                                  className="text-[9px] font-bold uppercase tracking-wide text-[#9CA3AF] hover:text-[#0D0437] transition-colors"
+                                                >
+                                                  {isFullShown ? "↑ Show less" : "Show full response →"}
+                                                </button>
+                                              )}
+                                              {run.notes && (
+                                                <p className="text-[10px] text-[#9CA3AF]">{run.notes}</p>
+                                              )}
+                                            </div>
+                                          );
+                                        })()}
+                                      </div>
+                                    );
+                                  })}
                                 </div>
                               )}
                             </div>
@@ -858,13 +1114,66 @@ function BrandKnowledgeInner() {
         </>
       )}
 
-      {/* All Scored Runs — sorted by hallucinations DESC, then accuracy ASC */}
-      <SubLabel>All Scored Runs</SubLabel>
-      <div className="border border-[#E2E8F0] rounded-lg overflow-x-auto bg-white">
+      {/* All Scored Runs — Level 1: fact, Level 2: model, Level 3: individual runs */}
+      <div id="all-scored-runs" className="scroll-mt-6">
+        <SubLabel>All Scored Runs</SubLabel>
+      </div>
+
+      {/* Filter pills */}
+      {(availableCategories.length > 1 || availableModels.length > 1) && (
+        <div className="flex items-center justify-between gap-3 mb-3 flex-wrap">
+          {availableCategories.length > 1 && (
+            <div className="flex items-center gap-1.5 flex-wrap">
+              <span className="text-[9px] font-bold uppercase tracking-[2px] text-[#9CA3AF]">Category</span>
+              {availableCategories.map((cat) => {
+                const isActive = catFilter === null || catFilter.includes(cat);
+                return (
+                  <button
+                    key={cat}
+                    type="button"
+                    onClick={() => toggleCatPill(cat, availableCategories)}
+                    className={`text-[10px] font-bold px-2.5 py-1 rounded-full border transition-colors ${
+                      isActive
+                        ? "bg-[#0D0437] text-white border-[#0D0437]"
+                        : "bg-white text-[#9CA3AF] border-[#E2E8F0] hover:border-[#0D0437] hover:text-[#0D0437]"
+                    }`}
+                  >
+                    {CATEGORY_LABELS[cat]}
+                  </button>
+                );
+              })}
+            </div>
+          )}
+          {availableModels.length > 1 && (
+            <div className="flex items-center gap-1.5 flex-wrap">
+              <span className="text-[9px] font-bold uppercase tracking-[2px] text-[#9CA3AF]">Model</span>
+              {availableModels.map((model) => {
+                const isActive = modelFilter === null || modelFilter.includes(model);
+                return (
+                  <button
+                    key={model}
+                    type="button"
+                    onClick={() => toggleModelPill(model, availableModels)}
+                    className={`text-[10px] font-bold px-2.5 py-1 rounded-full border transition-colors ${
+                      isActive
+                        ? "bg-[#0D0437] text-white border-[#0D0437]"
+                        : "bg-white text-[#9CA3AF] border-[#E2E8F0] hover:border-[#0D0437] hover:text-[#0D0437]"
+                    }`}
+                  >
+                    {MODEL_LABELS[model] ?? model}
+                  </button>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      )}
+
+      <div className={`border rounded-lg overflow-x-auto bg-white transition-all duration-300 ${tableHighlighted ? "border-[#0D0437] ring-2 ring-[#0D0437] ring-offset-2" : "border-[#E2E8F0]"}`}>
         <table className="w-full text-sm">
           <thead>
             <tr className="border-b bg-[#F4F6F9]">
-              {["Claim", "Model", "Variants", "Accuracy", "Hallucinations", ""].map((h) => (
+              {["Claim", "Models", "Total Runs", "Accuracy", "Hallucinations", ""].map((h) => (
                 <th
                   key={h}
                   className="text-left px-4 py-3 text-[8px] font-bold tracking-[2px] uppercase text-[#6B7280]"
@@ -875,116 +1184,164 @@ function BrandKnowledgeInner() {
             </tr>
           </thead>
           <tbody>
-            {allGroups
-              .sort((a, b) => {
-                if (b.hallucinatedCount !== a.hallucinatedCount)
-                  return b.hallucinatedCount - a.hallucinatedCount;
-                // Secondary: accuracy ascending (worst accuracy first)
-                const aRate = a.total > 0 ? a.correctCount / a.total : 1;
-                const bRate = b.total > 0 ? b.correctCount / b.total : 1;
-                return aRate - bRate;
-              })
-              .map((group) => {
-                const rate =
-                  group.total > 0 ? Math.round((group.correctCount / group.total) * 100) : 0;
-                const isExpanded = expandedTableGroups.has(group.key);
+            {visibleFactGroups.length === 0 && (
+              <tr>
+                <td colSpan={6} className="px-4 py-6 text-center text-[12px] text-[#9CA3AF]">
+                  No results match the current filters.
+                </td>
+              </tr>
+            )}
+            {visibleFactGroups.map((fg) => {
+              const factExpanded = expandedFacts.has(fg.key);
+              const rate = Math.round(fg.accuracyPct * 100);
 
-                return (
-                  <React.Fragment key={group.key}>
-                    <tr
-                      className="border-b hover:bg-[rgba(244,246,249,0.7)] cursor-pointer"
-                      onClick={() => toggleTableGroup(group.key)}
-                    >
-                      <td className="px-4 py-3 max-w-[260px]">
-                        <p className="text-[11px] text-[#1A1A2E] line-clamp-2 leading-snug">
-                          {group.fact_claim}
-                        </p>
-                        <span className="text-[9px] font-bold uppercase tracking-wide text-[#9CA3AF]">
-                          {CATEGORY_LABELS[group.fact_category]}
-                          {!group.fact_is_true && " · false claim"}
-                        </span>
-                      </td>
-                      <td className="px-4 py-3">
-                        <span className="text-[9px] font-bold uppercase tracking-wide px-1.5 py-0.5 rounded bg-[#F4F6F9] text-[#6B7280] border border-[#E2E8F0]">
-                          {MODEL_LABELS[group.model] ?? group.model}
-                        </span>
-                      </td>
-                      <td className="px-4 py-3 font-mono text-[12px] text-[#6B7280]">
-                        {group.total}
-                      </td>
-                      <td className="px-4 py-3">
-                        <span
-                          className={`text-[9px] font-bold uppercase tracking-wide px-2 py-0.5 rounded border ${accuracyBadgeClass(rate)}`}
-                        >
-                          {rate}%
-                        </span>
-                      </td>
-                      <td className="px-4 py-3">
-                        <div className="flex items-center gap-1 flex-wrap">
-                          {group.hallucinatedCount > 0 ? (
-                            <span className="text-[9px] font-bold uppercase tracking-wide px-2 py-0.5 rounded border bg-[rgba(255,75,110,0.08)] text-[#FF4B6E] border-[rgba(255,75,110,0.2)]">
-                              {group.hallucinatedCount}
-                            </span>
-                          ) : (
-                            <span className="text-[10px] text-[#9CA3AF]">—</span>
-                          )}
-                          {group.baitTriggeredCount > 0 && (
-                            <span className="text-[9px] font-bold uppercase tracking-wide px-1.5 py-0.5 rounded border bg-[rgba(123,94,167,0.08)] text-[#7B5EA7] border-[rgba(123,94,167,0.2)]">
-                              Bait Alert
-                            </span>
-                          )}
-                        </div>
-                      </td>
-                      <td className="px-4 py-3 text-[#9CA3AF]">
-                        {isExpanded ? (
-                          <ChevronUp className="h-3.5 w-3.5" />
+              return (
+                <React.Fragment key={fg.key}>
+                  {/* ── Level 1: Fact row ─────────────────────────── */}
+                  <tr
+                    className="border-b hover:bg-[rgba(244,246,249,0.7)] cursor-pointer"
+                    onClick={() => toggleFact(fg.key)}
+                  >
+                    <td className="px-4 py-3 max-w-[260px]">
+                      <p className="text-[11px] text-[#1A1A2E] line-clamp-2 leading-snug">{fg.fact_claim}</p>
+                      <span className="text-[9px] font-bold uppercase tracking-wide text-[#9CA3AF]">
+                        {CATEGORY_LABELS[fg.fact_category]}
+                        {!fg.fact_is_true && " · false claim"}
+                      </span>
+                    </td>
+                    <td className="px-4 py-3 font-mono text-[12px] text-[#6B7280]">{fg.models.length}</td>
+                    <td className="px-4 py-3 font-mono text-[12px] text-[#6B7280]">{fg.totalRuns}</td>
+                    <td className="px-4 py-3">
+                      <span className={`text-[9px] font-bold uppercase tracking-wide px-2 py-0.5 rounded border ${accuracyBadgeClass(rate)}`}>
+                        {rate}%
+                      </span>
+                    </td>
+                    <td className="px-4 py-3">
+                      <div className="flex items-center gap-1 flex-wrap">
+                        {fg.totalHallucinations > 0 ? (
+                          <span className="text-[9px] font-bold uppercase tracking-wide px-2 py-0.5 rounded border bg-[rgba(255,75,110,0.08)] text-[#FF4B6E] border-[rgba(255,75,110,0.2)]">
+                            {fg.totalHallucinations}
+                          </span>
                         ) : (
-                          <ChevronDown className="h-3.5 w-3.5" />
+                          <span className="text-[10px] text-[#9CA3AF]">—</span>
                         )}
-                      </td>
-                    </tr>
+                        {fg.totalBaitTriggered > 0 && (
+                          <span className="text-[9px] font-bold uppercase tracking-wide px-1.5 py-0.5 rounded border bg-[rgba(123,94,167,0.08)] text-[#7B5EA7] border-[rgba(123,94,167,0.2)]">
+                            Bait Alert
+                          </span>
+                        )}
+                      </div>
+                    </td>
+                    <td className="px-4 py-3 text-[#9CA3AF]">
+                      {factExpanded ? <ChevronUp className="h-3.5 w-3.5" /> : <ChevronDown className="h-3.5 w-3.5" />}
+                    </td>
+                  </tr>
 
-                    {/* Expanded individual run rows */}
-                    {isExpanded &&
-                      group.runs.map((run) => (
+                  {/* ── Level 2: Model sub-rows ───────────────────── */}
+                  {factExpanded && (modelFilter === null ? fg.models : fg.models.filter((me) => modelFilter.includes(me.model))).map((me) => {
+                    const mKey = `${fg.key}::${me.model}`;
+                    const modelExpanded = expandedFactModels.has(mKey);
+                    const mRate = me.total > 0 ? Math.round((me.correctCount / me.total) * 100) : 0;
+
+                    return (
+                      <React.Fragment key={mKey}>
                         <tr
-                          key={run.id}
-                          className="border-b bg-[rgba(244,246,249,0.4)] last:border-0"
+                          className="border-b bg-[rgba(244,246,249,0.4)] hover:bg-[rgba(244,246,249,0.7)] cursor-pointer"
+                          onClick={() => toggleFactModel(mKey)}
                         >
                           <td className="pl-8 pr-4 py-2 max-w-[260px]">
-                            <p className="text-[10px] text-[#6B7280] italic line-clamp-2">
-                              &ldquo;{run.query_text}&rdquo;
-                            </p>
+                            <span className="text-[9px] font-bold uppercase tracking-wide px-1.5 py-0.5 rounded bg-[#F4F6F9] text-[#6B7280] border border-[#E2E8F0]">
+                              {MODEL_LABELS[me.model] ?? me.model}
+                            </span>
                           </td>
                           <td className="px-4 py-2" />
-                          <td className="px-4 py-2" />
+                          <td className="px-4 py-2 font-mono text-[11px] text-[#6B7280]">{me.total}</td>
                           <td className="px-4 py-2">
-                            <span
-                              className={`text-[9px] font-bold uppercase tracking-wide px-1.5 py-0.5 rounded border ${ACCURACY_STYLES[run.accuracy] ?? ""}`}
-                            >
-                              {run.accuracy}
+                            <span className={`text-[9px] font-bold uppercase tracking-wide px-1.5 py-0.5 rounded border ${accuracyBadgeClass(mRate)}`}>
+                              {mRate}%
                             </span>
                           </td>
                           <td className="px-4 py-2">
-                            <div className="flex gap-1 flex-wrap">
-                              {run.hallucination && !run.bait_triggered && (
-                                <span className="text-[9px] font-bold uppercase tracking-wide px-1.5 py-0.5 rounded border bg-[rgba(255,75,110,0.08)] text-[#FF4B6E] border-[rgba(255,75,110,0.2)]">
-                                  hallucination
-                                </span>
-                              )}
-                              {run.bait_triggered && (
-                                <span className="text-[9px] font-bold uppercase tracking-wide px-1.5 py-0.5 rounded border bg-[rgba(123,94,167,0.08)] text-[#7B5EA7] border-[rgba(123,94,167,0.2)]">
-                                  FALSE CLAIM
-                                </span>
-                              )}
-                            </div>
+                            {me.hallucinatedCount > 0 ? (
+                              <span className="text-[9px] font-bold uppercase tracking-wide px-1.5 py-0.5 rounded border bg-[rgba(255,75,110,0.08)] text-[#FF4B6E] border-[rgba(255,75,110,0.2)]">
+                                {me.hallucinatedCount}
+                              </span>
+                            ) : (
+                              <span className="text-[10px] text-[#9CA3AF]">—</span>
+                            )}
                           </td>
-                          <td className="px-4 py-2" />
+                          <td className="px-4 py-2 text-[#9CA3AF]">
+                            {modelExpanded ? <ChevronUp className="h-3 w-3" /> : <ChevronDown className="h-3 w-3" />}
+                          </td>
                         </tr>
-                      ))}
-                  </React.Fragment>
-                );
-              })}
+
+                        {/* ── Level 3: Individual run rows ─────────── */}
+                        {modelExpanded && me.runs.map((run) => {
+                          const responseExpanded = expandedRunResponses.has(run.id);
+                          const responseLines = run.raw_response?.split("\n") ?? [];
+                          const isTruncated = responseLines.length > 6;
+                          const displayedResponse = isTruncated && !responseExpanded
+                            ? responseLines.slice(0, 6).join("\n")
+                            : run.raw_response ?? "";
+
+                          return (
+                            <tr key={run.id} className="border-b bg-[rgba(244,246,249,0.2)] last:border-0">
+                              <td colSpan={5} className="pl-12 pr-4 py-2.5 space-y-1.5">
+                                {/* Query text */}
+                                {run.query_text && (
+                                  <p className="text-[10px] text-[#6B7280] italic">
+                                    &ldquo;{run.query_text}&rdquo;
+                                  </p>
+                                )}
+                                {/* Accuracy + hallucination badges */}
+                                <div className="flex items-center gap-1.5 flex-wrap">
+                                  <span className={`text-[9px] font-bold uppercase tracking-wide px-1.5 py-0.5 rounded border ${ACCURACY_STYLES[run.accuracy] ?? ""}`}>
+                                    {run.accuracy}
+                                  </span>
+                                  {run.hallucination && !run.bait_triggered && (
+                                    <span className="text-[9px] font-bold uppercase tracking-wide px-1.5 py-0.5 rounded border bg-[rgba(255,75,110,0.08)] text-[#FF4B6E] border-[rgba(255,75,110,0.2)]">
+                                      hallucination
+                                    </span>
+                                  )}
+                                  {run.bait_triggered && (
+                                    <span className="text-[9px] font-bold uppercase tracking-wide px-1.5 py-0.5 rounded border bg-[rgba(123,94,167,0.08)] text-[#7B5EA7] border-[rgba(123,94,167,0.2)]">
+                                      FALSE CLAIM CONFIRMED
+                                    </span>
+                                  )}
+                                </div>
+                                {/* raw_response — capped at 6 lines */}
+                                {displayedResponse && (
+                                  <div className="space-y-0.5">
+                                    <pre className="text-[10px] text-[#6B7280] leading-relaxed whitespace-pre-wrap font-sans bg-[#F4F6F9] border border-[#E2E8F0] rounded p-2">
+                                      {displayedResponse}
+                                      {isTruncated && !responseExpanded && "…"}
+                                    </pre>
+                                    {isTruncated && (
+                                      <button
+                                        type="button"
+                                        onClick={(e) => { e.stopPropagation(); toggleRunResponse(run.id); }}
+                                        className="text-[9px] font-bold uppercase tracking-wide text-[#9CA3AF] hover:text-[#0D0437] transition-colors"
+                                      >
+                                        {responseExpanded ? "↑ Show less" : "Show full response →"}
+                                      </button>
+                                    )}
+                                  </div>
+                                )}
+                                {/* Notes */}
+                                {run.notes && (
+                                  <p className="text-[10px] text-[#9CA3AF]">{run.notes}</p>
+                                )}
+                              </td>
+                              <td className="px-4 py-2" />
+                            </tr>
+                          );
+                        })}
+                      </React.Fragment>
+                    );
+                  })}
+                </React.Fragment>
+              );
+            })}
           </tbody>
         </table>
       </div>

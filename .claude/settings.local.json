@@ -15,7 +15,9 @@
       "Bash(wc:*)",
       "mcp__ide__getDiagnostics",
       "Bash(git commit:*)",
-      "Bash(git:*)"
+      "Bash(git:*)",
+      "Bash(npm_config_cache=/tmp/npm-cache-2 npx next build:*)",
+      "Bash(node:*)"
     ]
   }
 }

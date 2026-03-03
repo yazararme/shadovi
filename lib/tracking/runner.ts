@@ -263,6 +263,18 @@ export async function runTrackingForClient(
   const factMap = new Map<string, BrandFact>();
   ((factsData ?? []) as BrandFact[]).forEach((f) => factMap.set(f.id, f));
 
+  // ── Fetch active portfolio version once — stamped on all inserts below ──────
+  // Using the live is_active flag rather than query.version_id so that a version
+  // change between query generation and run time is correctly reflected.
+  const { data: activeVersion } = await supabase
+    .from("portfolio_versions")
+    .select("id")
+    .eq("client_id", clientId)
+    .eq("is_active", true)
+    .single();
+
+  const versionId = activeVersion?.id ?? null;
+
   // ── 4. Run queries × models ────────────────────────────────────────────────
   // Each model is a different API provider with independent rate limits, so we run them
   // in parallel. Within each model, queries stay serial to respect per-provider limits.
@@ -346,9 +358,8 @@ export async function runTrackingForClient(
             // Denormalised fields stamped at insert time to avoid joins in downstream queries
             query_intent: query.intent,
             citation_present: perplexityCitations.length > 0 || (Array.isArray(scored.cited_sources) && scored.cited_sources.length > 0),
-            // version_id links this run to the portfolio snapshot it was generated against.
-            // null for pre-versioning clients until they next regenerate.
-            version_id: query.version_id,
+            // version_id stamped from the active portfolio_versions record fetched before the loop.
+            version_id: versionId,
           })
           .select()
           .single();
@@ -388,7 +399,7 @@ export async function runTrackingForClient(
                   scorer_model: ks.scorer_model,
                   bait_triggered,
                   brand_positioning: ks.brand_positioning,
-                  version_id: query.version_id,
+                  version_id: versionId,
                 });
                 if (ksInsertError) {
                   console.error(
@@ -493,6 +504,7 @@ export async function runTrackingForClient(
                     normaliseBrandName(b.brand).toLowerCase() === brandName.toLowerCase(),
                   mention_context: b.context,
                   mention_sentiment: b.sentiment,
+                  version_id: versionId,
                 }));
 
                 const { error: mentionInsertError } = await supabase
@@ -567,6 +579,7 @@ export async function runTrackingForClient(
                       is_tracked_brand: true,
                       mention_context: "Detected by fallback string scan",
                       mention_sentiment: "unclear",
+                      version_id: versionId,
                     });
                   if (rbmErr) {
                     console.error(

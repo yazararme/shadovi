@@ -20,13 +20,25 @@ export default function LoginPage() {
     setLoading(true);
 
     const supabase = createClient();
-    const { error } = await supabase.auth.signInWithPassword({ email, password });
+    const { data, error } = await supabase.auth.signInWithPassword({ email, password });
 
     if (error) {
       setError(error.message);
       setLoading(false);
     } else {
-      router.push("/discover");
+      // Route based on client status — active users go to dashboard, new/onboarding users go to setup
+      const user = data.user;
+      if (user) {
+        const { data: client } = await supabase
+          .from("clients")
+          .select("status")
+          .eq("user_id", user.id)
+          .limit(1)
+          .single();
+        router.push(client?.status === "active" ? "/dashboard/overview" : "/discover");
+      } else {
+        router.push("/discover");
+      }
       router.refresh();
     }
   }

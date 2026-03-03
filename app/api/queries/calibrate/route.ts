@@ -46,13 +46,41 @@ export async function POST(request: Request) {
 
     const queries = await calibrateQueries(ctx, brandFacts, instruction, affectedIntents);
 
-    // Delete only non-manually-added queries for the affected intent layers
-    await supabase
+    // Fetch candidate queries (non-manually-added, matching intents)
+    const { data: candidates } = await supabase
       .from("queries")
-      .delete()
+      .select("id")
       .eq("client_id", clientId)
       .in("intent", affectedIntents)
       .eq("manually_added", false);
+
+    if (candidates && candidates.length > 0) {
+      const candidateIds = candidates.map((q) => q.id);
+
+      // Determine which candidates have associated tracking_runs — those must be
+      // archived rather than deleted to preserve the historical data chain.
+      const { data: runsData } = await supabase
+        .from("tracking_runs")
+        .select("query_id")
+        .in("query_id", candidateIds);
+
+      const idsWithRuns = new Set((runsData ?? []).map((r) => r.query_id));
+      const idsToArchive = candidateIds.filter((id) => idsWithRuns.has(id));
+      const idsToDelete  = candidateIds.filter((id) => !idsWithRuns.has(id));
+
+      if (idsToArchive.length > 0) {
+        await supabase
+          .from("queries")
+          .update({ status: "archived" })
+          .in("id", idsToArchive);
+      }
+      if (idsToDelete.length > 0) {
+        await supabase
+          .from("queries")
+          .delete()
+          .in("id", idsToDelete);
+      }
+    }
 
     const { data: inserted, error: insertError } = await supabase
       .from("queries")

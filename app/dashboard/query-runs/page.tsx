@@ -266,7 +266,7 @@ function FilterTab<T extends string>({
 // ─── Page inner ───────────────────────────────────────────────────────────────
 
 function QueryRunsInner() {
-  const { activeClientId: clientIdParam } = useClientContext();
+  const { activeClientId: clientIdParam, isAdmin } = useClientContext();
 
   const [client,  setClient]  = useState<Client | null>(null);
   const [allRuns, setAllRuns] = useState<EnrichedRun[]>([]);
@@ -277,8 +277,6 @@ function QueryRunsInner() {
   const [modelFilter,  setModelFilter]  = useState<ModelFilter>("all");
   const [page,         setPage]         = useState(0);
   const [expandedKeys, setExpandedKeys] = useState<Set<string>>(new Set());
-  const [isAdmin, setIsAdmin] = useState(false);
-
   // Export field picker
   const [exportOpen,   setExportOpen]   = useState(false);
   const [exportFields, setExportFields] = useState<Set<string>>(new Set(DEFAULT_EXPORT_FIELDS));
@@ -307,12 +305,6 @@ function QueryRunsInner() {
   async function loadData() {
     setLoading(true);
     const supabase = createClient();
-
-    // Check admin status — bypasses daily run limit for the admin account
-    const { data: { user } } = await supabase.auth.getUser();
-    if (user?.email && process.env.NEXT_PUBLIC_ADMIN_EMAIL) {
-      setIsAdmin(user.email === process.env.NEXT_PUBLIC_ADMIN_EMAIL);
-    }
 
     let q = supabase.from("clients").select("*").eq("status", "active");
     if (clientIdParam) q = q.eq("id", clientIdParam);
