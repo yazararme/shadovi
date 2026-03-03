@@ -36,9 +36,9 @@ const PRIMARY_TIMEOUT_MS: Record<LLMModel, number> = {
 // Hard timeout on any single LLM call. Without this, one hung API connection
 // blocks the entire model loop indefinitely — which is what causes 20+ min runs.
 // Primary calls: per-model (see PRIMARY_TIMEOUT_MS). Enrichment/scoring: 45s.
-function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
+function withTimeout<T>(promise: PromiseLike<T>, ms: number, label: string): Promise<T> {
   return Promise.race([
-    promise,
+    Promise.resolve(promise),
     new Promise<never>((_, reject) =>
       setTimeout(() => reject(new Error(`[timeout] ${label} exceeded ${ms}ms`)), ms)
     ),
@@ -251,12 +251,19 @@ export interface ModelBatchResult {
  */
 export async function fetchRunContext(clientId: string): Promise<RunContext> {
   const supabase = createServiceClient();
+  const DB_TIMEOUT_MS = 10_000;
 
-  const { data: client } = await supabase
-    .from("clients")
-    .select("id, status, selected_models, brand_dna")
-    .eq("id", clientId)
-    .single();
+  console.log(`[fetchRunContext] start clientId=${clientId}`);
+
+  // ── Query 1: clients ──────────────────────────────────────────────────────
+  let t = Date.now();
+  console.log(`[fetchRunContext] querying clients…`);
+  const { data: client } = await withTimeout(
+    supabase.from("clients").select("id, status, selected_models, brand_dna").eq("id", clientId).single(),
+    DB_TIMEOUT_MS,
+    "clients query"
+  );
+  console.log(`[fetchRunContext] clients done in ${Date.now() - t}ms`);
 
   if (!client || client.status !== "active") {
     throw new Error(`Client ${clientId} not found or not active`);
@@ -275,26 +282,45 @@ export async function fetchRunContext(clientId: string): Promise<RunContext> {
   const selectedModels: LLMModel[] = (client.selected_models ?? ["gpt-4o", "perplexity"])
     .map((m: string) => MODEL_ALIASES[m] ?? m) as LLMModel[];
 
-  const { data: queries } = await supabase
-    .from("queries")
-    .select("id, text, intent, fact_id, is_bait, version_id")
-    .eq("client_id", clientId)
-    .eq("status", "active");
+  // ── Query 2: queries ──────────────────────────────────────────────────────
+  t = Date.now();
+  console.log(`[fetchRunContext] querying queries…`);
+  const { data: queries } = await withTimeout(
+    supabase.from("queries").select("id, text, intent, fact_id, is_bait, version_id").eq("client_id", clientId).eq("status", "active"),
+    DB_TIMEOUT_MS,
+    "queries query"
+  );
+  console.log(`[fetchRunContext] queries done in ${Date.now() - t}ms — count=${queries?.length ?? 0}`);
 
   if (!queries || queries.length === 0) {
     throw new Error(`No active queries for client ${clientId}`);
   }
 
+  // ── Queries 3–5: competitors, brand_facts, portfolio_versions (parallel) ──
+  t = Date.now();
+  console.log(`[fetchRunContext] querying competitors, brand_facts, portfolio_versions in parallel…`);
   const [{ data: competitors }, { data: factsData }, { data: activeVersion }] = await Promise.all([
-    supabase.from("competitors").select("id, name").eq("client_id", clientId),
-    supabase.from("brand_facts").select("*").eq("client_id", clientId),
-    supabase
-      .from("portfolio_versions")
-      .select("id")
-      .eq("client_id", clientId)
-      .eq("is_active", true)
-      .single(),
+    withTimeout(
+      supabase.from("competitors").select("id, name").eq("client_id", clientId),
+      DB_TIMEOUT_MS,
+      "competitors query"
+    ),
+    withTimeout(
+      supabase.from("brand_facts").select("*").eq("client_id", clientId),
+      DB_TIMEOUT_MS,
+      "brand_facts query"
+    ),
+    withTimeout(
+      supabase.from("portfolio_versions").select("id").eq("client_id", clientId).eq("is_active", true).single(),
+      DB_TIMEOUT_MS,
+      "portfolio_versions query"
+    ),
   ]);
+  console.log(
+    `[fetchRunContext] parallel queries done in ${Date.now() - t}ms — competitors=${competitors?.length ?? 0} facts=${factsData?.length ?? 0} version=${activeVersion?.id ?? "none"}`
+  );
+
+  console.log(`[fetchRunContext] complete clientId=${clientId}`);
 
   return {
     clientId,
