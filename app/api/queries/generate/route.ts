@@ -61,12 +61,12 @@ export async function POST(request: Request) {
       console.error("[queries/generate] Failed to deactivate existing queries:", deactivateError.message, { clientId, versionId });
     }
 
+    // Always insert as 'active' — queries in pending_approval are invisible to the
+    // tracker and silently produce "No active queries" failures. The review/approve
+    // step has been removed; generation is now the single activation point.
     const { data: inserted, error: insertError } = await supabase
       .from("queries")
-      // If the client is already active (post-onboarding regeneration), activate immediately
-      // so tracking runs don't fail with "No active queries". During onboarding the client
-      // is still in "onboarding" status, so pending_approval is correct there.
-      .insert(queries.map((q) => ({ ...q, client_id: clientId, status: clientRes.data.status === "active" ? "active" : "pending_approval", version_id: versionId })))
+      .insert(queries.map((q) => ({ ...q, client_id: clientId, status: "active", version_id: versionId })))
       .select();
 
     // Check insert error before the version count update so we don't stamp a wrong count
@@ -84,6 +84,18 @@ export async function POST(request: Request) {
 
       if (versionUpdateError) {
         console.error("[queries/generate] Failed to update portfolio_versions query_count:", versionUpdateError.message, { versionId, count: inserted.length });
+      }
+    }
+
+    // Activate the client if it was still in onboarding. Makes generate/route the
+    // single activation point — no separate /api/versioning/activate step needed.
+    if (clientRes.data.status === "onboarding") {
+      const { error: activateError } = await supabase
+        .from("clients")
+        .update({ status: "active" })
+        .eq("id", clientId);
+      if (activateError) {
+        console.error("[queries/generate] Failed to activate client:", activateError.message, { clientId });
       }
     }
 
