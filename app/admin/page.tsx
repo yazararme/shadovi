@@ -3,13 +3,10 @@
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
-import { createClient } from "@/lib/supabase/client";
 import { toast } from "sonner";
 import { Copy, ArrowLeft, Download, Trash2 } from "lucide-react";
 import type { Client, LLMModel } from "@/types";
 
-// Must match ADMIN_EMAIL in .env.local and other ADMIN_EMAIL constants
-const ADMIN_EMAIL = "yazararme@gmail.com";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -144,16 +141,10 @@ export default function AdminPage() {
   const [confirmRemoveId, setConfirmRemoveId] = useState<string | null>(null);
 
   useEffect(() => {
-    async function init() {
-      const supabase = createClient();
-      const { data: { user } } = await supabase.auth.getUser();
-      if (!user || user.email !== ADMIN_EMAIL) {
-        router.replace("/dashboard/overview");
-        return;
-      }
-      await loadData();
-    }
-    init();
+    // Auth is enforced server-side by /api/admin/data (returns 403 if not admin).
+    // loadData() redirects to /dashboard/overview on any non-OK response, so no
+    // client-side email check is needed here.
+    loadData();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
