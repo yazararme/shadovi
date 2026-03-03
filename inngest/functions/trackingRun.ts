@@ -20,15 +20,27 @@ export const trackingRunFunction = inngest.createFunction(
     const ctx = await step.run("setup", () => fetchRunContext(clientId));
 
     // Steps 2-N: One step.run() per model, running sequentially.
-    // step.run() calls inside Promise.all ran sequentially anyway (they compete
-    // for the same per-client concurrency slot), so sequential is explicit here.
-    // Each step has its own timeout and retry budget within the function run.
+    // Hardcoded per-model steps (not a for loop) because Inngest replays functions
+    // from scratch on each checkpoint — a dynamic loop over ctx.selectedModels
+    // produces non-deterministic step IDs across replays, causing all model work
+    // to collapse into the wrong step. Static if-guards with fixed step IDs are safe.
+    const modelsToRun = ctx.selectedModels as LLMModel[];
     const modelResults: Awaited<ReturnType<typeof runModelBatch>>[] = [];
-    for (const model of ctx.selectedModels as LLMModel[]) {
-      const result = await step.run(`model-${model}`, () =>
-        runModelBatch(ctx, model)
-      );
-      modelResults.push(result);
+
+    if (modelsToRun.includes("gpt-4o")) {
+      modelResults.push(await step.run("model-gpt-4o", () => runModelBatch(ctx, "gpt-4o")));
+    }
+    if (modelsToRun.includes("perplexity")) {
+      modelResults.push(await step.run("model-perplexity", () => runModelBatch(ctx, "perplexity")));
+    }
+    if (modelsToRun.includes("claude-sonnet-4-6")) {
+      modelResults.push(await step.run("model-claude-sonnet-4-6", () => runModelBatch(ctx, "claude-sonnet-4-6")));
+    }
+    if (modelsToRun.includes("gemini")) {
+      modelResults.push(await step.run("model-gemini", () => runModelBatch(ctx, "gemini")));
+    }
+    if (modelsToRun.includes("deepseek")) {
+      modelResults.push(await step.run("model-deepseek", () => runModelBatch(ctx, "deepseek")));
     }
 
     // Step N+1: Merge per-model tallies and generate AI recommendations.
