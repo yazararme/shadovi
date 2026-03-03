@@ -1,45 +1,35 @@
 import { inngest } from "@/inngest/client";
-import { fetchRunContext, finaliseRun } from "@/lib/tracking/runner";
-import { trackingModelBatchFunction } from "@/inngest/functions/modelBatch";
+import { fetchRunContext, runModelBatch, finaliseRun } from "@/lib/tracking/runner";
 import { clusterGapsForClient } from "@/lib/tracking/gap-clusterer";
+import type { LLMModel } from "@/types";
 
 export const trackingRunFunction = inngest.createFunction(
   {
     id: "tracking-run",
     // One run per client at a time — prevents two events for the same client from
     // executing in parallel if the deduplication key somehow misses (e.g. events
-    // sent > 60 seconds apart). Global limit of 2 keeps total LLM load manageable.
-    concurrency: [
-      { limit: 1, key: "event.data.clientId" },
-      { limit: 2 },
-    ],
+    // sent > 60 seconds apart).
+    concurrency: { limit: 1, key: "event.data.clientId" },
   },
   { event: "tracking/run.requested" },
   async ({ event, step }) => {
     const { clientId } = event.data as { clientId: string };
 
     // Step 1: Fetch client context — queries, competitors, facts, active version.
-    // Stored as Inngest state so subsequent steps don't need to re-query the DB.
+    // Stored as Inngest state so subsequent steps don't re-query the DB.
     const ctx = await step.run("setup", () => fetchRunContext(clientId));
 
-    // Steps 2-N: Fan-out — one step.invoke() per model running in true parallel.
-    //
-    // step.invoke() calls trackingModelBatchFunction as a child function run.
-    // Unlike step.run(), child invocations are independent function runs and do NOT
-    // share the parent's concurrency slot (the { limit:1, key:clientId } above).
-    // This means all 5 model batches start immediately and run concurrently.
-    //
-    // Previously these were step.run() calls in Promise.all, which ran sequentially
-    // because each step.run competed for the same per-client concurrency slot.
-    const modelResults = await Promise.all(
-      ctx.selectedModels.map((model) =>
-        step.invoke(`model-${model}`, {
-          function: trackingModelBatchFunction,
-          data: { ctx, model },
-          timeout: "10m",
-        })
-      )
-    );
+    // Steps 2-N: One step.run() per model, running sequentially.
+    // step.run() calls inside Promise.all ran sequentially anyway (they compete
+    // for the same per-client concurrency slot), so sequential is explicit here.
+    // Each step has its own timeout and retry budget within the function run.
+    const modelResults: Awaited<ReturnType<typeof runModelBatch>>[] = [];
+    for (const model of ctx.selectedModels as LLMModel[]) {
+      const result = await step.run(`model-${model}`, () =>
+        runModelBatch(ctx, model)
+      );
+      modelResults.push(result);
+    }
 
     // Step N+1: Merge per-model tallies and generate AI recommendations.
     const result = await step.run("finalise", () =>
