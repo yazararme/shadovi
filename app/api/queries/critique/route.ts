@@ -58,8 +58,13 @@ ${JSON.stringify(queries.map((q) => ({ id: q.id, text: q.text, intent: q.intent,
       return NextResponse.json({ error: "Invalid critique response format" }, { status: 500 });
     }
 
+    // Build a set of IDs we actually sent to the LLM — only update those.
+    // Guards against a manipulated LLM response referencing query IDs from other clients.
+    const validQueryIds = new Set(queries.map((q) => q.id));
+
     // Apply updates
     for (const update of parsed.data) {
+      if (!validQueryIds.has(update.id)) continue; // reject any ID not belonging to this client
       const patch: { relevance_score?: number; text?: string } = {};
       if (update.relevance_score !== undefined) patch.relevance_score = update.relevance_score;
       if (update.text !== undefined) patch.text = update.text;

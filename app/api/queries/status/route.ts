@@ -9,6 +9,8 @@ export async function GET(request: Request) {
   if (!clientId) return NextResponse.json({ ready: false });
 
   const supabase = await createClient();
+  const { data: { user } } = await supabase.auth.getUser();
+  if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   const { count } = await supabase
     .from("queries")
     .select("*", { count: "exact", head: true })
