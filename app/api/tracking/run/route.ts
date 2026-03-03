@@ -30,6 +30,17 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: "Client is not active" }, { status: 400 });
     }
 
+    // Auto-activate any pending_approval queries before queuing the run.
+    // Queries can land in pending_approval when they are regenerated post-onboarding
+    // (generate/route.ts skips this for active clients, but older rows or calibrate
+    // runs may still be pending). The runner only reads status='active' queries, so
+    // without this step the run silently fails with "No active queries".
+    await supabase
+      .from("queries")
+      .update({ status: "active" })
+      .eq("client_id", clientId)
+      .eq("status", "pending_approval");
+
     // Send event to Inngest — returns immediately, run happens asynchronously.
     // The `id` field is an Inngest deduplication key: two sends with the same id
     // within the deduplication window (default 24h) collapse into one execution.

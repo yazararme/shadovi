@@ -63,7 +63,10 @@ export async function POST(request: Request) {
 
     const { data: inserted, error: insertError } = await supabase
       .from("queries")
-      .insert(queries.map((q) => ({ ...q, client_id: clientId, status: "pending_approval", version_id: versionId })))
+      // If the client is already active (post-onboarding regeneration), activate immediately
+      // so tracking runs don't fail with "No active queries". During onboarding the client
+      // is still in "onboarding" status, so pending_approval is correct there.
+      .insert(queries.map((q) => ({ ...q, client_id: clientId, status: clientRes.data.status === "active" ? "active" : "pending_approval", version_id: versionId })))
       .select();
 
     // Check insert error before the version count update so we don't stamp a wrong count
