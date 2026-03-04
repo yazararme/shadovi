@@ -677,9 +677,9 @@ function OverviewInner() {
       {hasNoData ? (
         <div className="border border-[#E2E8F0] rounded-xl p-10 bg-white text-center">
           <p className="text-[15px] font-semibold text-[#0D0437] mb-1">
-            Click "Run Now" to generate your first report
+            Your first audit is running
           </p>
-          <p className="text-[13px] text-[#6B7280]">Takes ~30 minutes</p>
+          <p className="text-[13px] text-[#6B7280]">Results start appearing in about 30 minutes.</p>
         </div>
       ) : (
         <>

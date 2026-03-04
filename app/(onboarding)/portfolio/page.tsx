@@ -1105,7 +1105,7 @@ function RightPanel({ data, queries, onEdit, selectedModels, setSelectedModels, 
             : "Start Monitoring →"}
         </button>
         <p className="text-xs text-muted-foreground text-center mt-2">
-          Your first Roadmap and intelligence report will be ready in ~4 hours.
+          Results start appearing in about 30 minutes.
         </p>
       </div>
     </div>

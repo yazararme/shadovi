@@ -267,10 +267,10 @@ function DiscoverPageInner() {
       {/* Page header */}
       <div className="text-center mb-10">
         <h1 className="font-serif text-[32px] font-semibold text-[#0D0437] tracking-tight leading-tight">
-          What does AI say about your brand?
+          How should AI talk about your brand?
         </h1>
         <p className="text-[14px] text-[#6B7280] mt-2">
-          Add your website and any supporting context — see how ChatGPT, Claude,
+          Add your website and any supporting context — we&apos;ll build a tailored audit blueprint that tests how ChatGPT, Claude,
           Perplexity, Gemini, and DeepSeek describe, rank, and compare you.
         </p>
       </div>
@@ -409,7 +409,7 @@ function DiscoverPageInner() {
             disabled={loading || !url.trim()}
             className="w-full h-12 rounded-md text-[15px] font-semibold text-white mt-2 transition-opacity disabled:opacity-40 grad-bar hover:opacity-90"
           >
-            {loading ? "Analysing…" : "Analyse my AI presence →"}
+            {loading ? "Building…" : "Build my audit blueprint →"}
           </button>
         </form>
       </div>
@@ -418,7 +418,7 @@ function DiscoverPageInner() {
       {loading && (
         <div className="mt-8 space-y-4">
           <p className="text-[13px] text-[#6B7280] text-center">
-            Analysing your AI presence across ChatGPT, Claude, Perplexity, Gemini, and DeepSeek… this takes 30–60 seconds.
+            Synthesising your brand DNA, mapping competitors, and building buyer personas to generate your audit blueprint…
           </p>
           <div className="grid grid-cols-2 gap-3">
             {[...Array(4)].map((_, i) => (
