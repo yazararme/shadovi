@@ -14,7 +14,7 @@ export async function POST(request: Request) {
     const { data: { user } } = await supabase.auth.getUser();
     if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
-    const { clientId, trigger = "manual_regeneration" } = await request.json() as { clientId: string; trigger?: VersionTrigger };
+    const { clientId, trigger = "manual_regeneration", versionName } = await request.json() as { clientId: string; trigger?: VersionTrigger; versionName?: string };
     if (!clientId) return NextResponse.json({ error: "clientId required" }, { status: 400 });
 
     // Fetch full client context + brand facts for anchoring validation queries
@@ -28,6 +28,22 @@ export async function POST(request: Request) {
     if (clientRes.error || !clientRes.data) {
       return NextResponse.json({ error: "Client not found" }, { status: 404 });
     }
+
+    // Ownership check — must happen before any writes.
+    // The service-role write below bypasses RLS, so we verify access here:
+    // user either owns the client directly or has a user_clients junction row.
+    const isOwner = clientRes.data.user_id === user.id;
+    if (!isOwner) {
+      const { count } = await supabase
+        .from("user_clients")
+        .select("id", { count: "exact", head: true })
+        .eq("user_id", user.id)
+        .eq("client_id", clientId);
+      if (!count || count === 0) {
+        return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+      }
+    }
+
     if (!clientRes.data.brand_dna) {
       return NextResponse.json({ error: "No brand DNA" }, { status: 400 });
     }
@@ -79,11 +95,14 @@ export async function POST(request: Request) {
       throw new Error(`DB insert error: ${insertError.message}`);
     }
 
-    // Update the version row with the accurate post-insert query count
+    // Update the version row with the accurate post-insert query count (and optional name)
     if (inserted?.length) {
+      const versionPatch: Record<string, unknown> = { query_count: inserted.length };
+      if (versionName?.trim()) versionPatch.name = versionName.trim();
+
       const { error: versionUpdateError } = await supabase
         .from("portfolio_versions")
-        .update({ query_count: inserted.length })
+        .update(versionPatch)
         .eq("id", versionId);
 
       if (versionUpdateError) {

@@ -62,10 +62,11 @@ function LoadingSkeleton() {
 // ── Regen prompt dialog ───────────────────────────────────────────────────────
 
 function RegenPrompt({ onRegenerate, onDismiss, isRegenerating }: {
-  onRegenerate: () => void;
+  onRegenerate: (name: string) => void;
   onDismiss: () => void;
   isRegenerating: boolean;
 }) {
+  const [versionName, setVersionName] = useState("");
   return (
     <div className="fixed inset-0 z-[70] bg-black/40 flex items-center justify-center p-4">
       <div className="bg-white rounded-xl shadow-2xl w-full max-w-md p-6 space-y-4">
@@ -74,12 +75,20 @@ function RegenPrompt({ onRegenerate, onDismiss, isRegenerating }: {
           Your brand profile has changed. Regenerating will replace all AI-generated queries with
           a fresh set tailored to your updated profile. Manually added queries are preserved.
         </p>
+        <input
+          type="text"
+          value={versionName}
+          onChange={(e) => setVersionName(e.target.value)}
+          placeholder="Name this query set (optional)"
+          disabled={isRegenerating}
+          className="w-full text-sm px-3 py-2 rounded-lg border border-[#E2E8F0] focus:outline-none focus:ring-2 focus:ring-[#0D0437]/20 placeholder:text-[#9CA3AF] disabled:opacity-50"
+        />
         <div className="flex justify-end gap-2">
           <Button variant="outline" size="sm" onClick={onDismiss} disabled={isRegenerating}
             className="border-[#E2E8F0]">
             Keep current queries
           </Button>
-          <Button size="sm" onClick={onRegenerate} disabled={isRegenerating}
+          <Button size="sm" onClick={() => onRegenerate(versionName)} disabled={isRegenerating}
             className="bg-[#0D0437] hover:bg-[#1a1150] text-white">
             {isRegenerating
               ? <><Loader2 className="h-3.5 w-3.5 mr-1.5 animate-spin" />Regenerating…</>
@@ -742,14 +751,14 @@ function BrandProfileInner() {
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, [activeModal]);
 
-  async function handleRegenerate() {
+  async function handleRegenerate(versionName: string) {
     if (!clientId) return;
     setIsRegenerating(true);
     try {
       const res = await fetch("/api/queries/generate", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ clientId }),
+        body: JSON.stringify({ clientId, ...(versionName.trim() && { versionName: versionName.trim() }) }),
       });
       const { error: genError } = await res.json();
       if (genError) { toast.error("Failed to regenerate queries"); return; }

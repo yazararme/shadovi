@@ -165,6 +165,17 @@ export interface BrandKnowledgeScore {
 
 export type LLMModel = "gpt-4o" | "claude-sonnet-4-6" | "perplexity" | "gemini" | "deepseek";
 
+// Enriched missed-query detail built by finaliseRun and consumed by the recommender.
+// Replaces the bare string[] that was in RunSummary — now carries intent, per-model
+// coverage gaps, and competitor displacement context for richer prompt generation.
+export interface MissedQueryDetail {
+  queryId: string;
+  text: string;
+  intent: QueryIntent;
+  modelsMissed: LLMModel[];
+  competitorsPresent: string[];
+}
+
 export interface CitedSource {
   url: string;
   domain: string;
@@ -237,6 +248,13 @@ export interface Recommendation {
   rationale: string;
   status: "open" | "in_progress" | "done" | "dismissed";
   created_at: string;
+  // V2 batch fields — null on pre-migration rows
+  batch_id: string | null;
+  source_query_text: string | null;
+  source_cluster_name: string | null;
+  mention_rate_at_generation: number | null;
+  version_id: string | null;
+  generated_from_run_at: string | null;
 }
 
 // ─── Aggregated Context (passed to LLM calls) ─────────────────────────────────

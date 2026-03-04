@@ -10,7 +10,7 @@ import { callDeepSeek } from "@/lib/llm/deepseek";
 import { scoreResponse } from "@/lib/tracking/scorer";
 import { scoreKnowledge } from "@/lib/tracking/knowledge-scorer";
 import { generateRecommendations, type RunSummary } from "@/lib/tracking/recommender";
-import type { LLMModel, Competitor, Query, BrandFact } from "@/types";
+import type { LLMModel, Competitor, Query, BrandFact, QueryIntent, MissedQueryDetail } from "@/types";
 
 // Dispatch table — maps model ID to the appropriate LLM wrapper
 const LLM_CALLERS: Record<LLMModel, (prompt: string) => Promise<string>> = {
@@ -26,10 +26,10 @@ const LLM_CALLERS: Record<LLMModel, (prompt: string) => Promise<string>> = {
 // Without a higher ceiling, ~76% of Perplexity queries time out and are silently
 // skipped, producing severely underrepresented Perplexity data.
 const PRIMARY_TIMEOUT_MS: Record<LLMModel, number> = {
-  "gpt-4o": 90_000,
-  "claude-sonnet-4-6": 90_000,
-  "gemini": 90_000,
-  "deepseek": 90_000,
+  "gpt-4o": 60_000,//[KK] was 90, dropped as deepseek was taking too much time
+  "claude-sonnet-4-6": 60_000, //[KK] was 90, dropped as deepseek was taking too much time
+  "gemini": 60_000, //[KK] was 90, dropped as deepseek was taking too much time
+  "deepseek": 20_000, //[KK] was 90, dropped as deepseek was taking too much time
   "perplexity": 60_000,
 };
 
@@ -238,6 +238,8 @@ export interface RunContext {
 /** Result from processing a single query — returned by each step.run() and aggregated by finaliseRun. */
 export interface QueryStepResult {
   model: LLMModel;
+  queryId: string;
+  queryIntent: QueryIntent;
   runCreated: boolean;
   mentioned: boolean;
   missedQueryText: string | null;
@@ -370,6 +372,8 @@ export async function processOneQuery(
 
   const result: QueryStepResult = {
     model,
+    queryId: query.id,
+    queryIntent: query.intent,
     runCreated: false,
     mentioned: false,
     missedQueryText: null,
@@ -671,45 +675,79 @@ export async function processOneQuery(
 /**
  * Merge per-query step results into a RunSummary and generate AI recommendations.
  * Accepts the flat array of QueryStepResult from all (model, query) steps.
+ *
+ * versionId: the active portfolio version at run time — stamped on generated recs.
  */
 export async function finaliseRun(
   clientId: string,
   brandName: string,
   queryCount: number,
   models: LLMModel[],
-  queryResults: QueryStepResult[]
+  queryResults: QueryStepResult[],
+  versionId: string | null = null
 ): Promise<{ runsCreated: number }> {
-  // Group results by model for the summary
   const byModel: Record<string, { mentioned: number }> = {};
+  // Keyed by queryId — accumulates per-query miss detail across models
+  const missedMap = new Map<string, MissedQueryDetail>();
   const competitorCounts: Record<string, number> = {};
-  const missedSet = new Set<string>();
   let runsCreated = 0;
 
   for (const r of queryResults) {
     if (!byModel[r.model]) byModel[r.model] = { mentioned: 0 };
     if (r.runCreated) runsCreated++;
     if (r.mentioned) byModel[r.model].mentioned++;
-    if (r.missedQueryText) missedSet.add(r.missedQueryText);
+
+    if (r.missedQueryText && r.queryId) {
+      // Accumulate: one MissedQueryDetail per unique queryId, listing all models that missed it
+      const existing = missedMap.get(r.queryId);
+      if (existing) {
+        existing.modelsMissed.push(r.model);
+        for (const c of Object.keys(r.competitorCounts)) {
+          if (!existing.competitorsPresent.includes(c)) existing.competitorsPresent.push(c);
+        }
+      } else {
+        missedMap.set(r.queryId, {
+          queryId: r.queryId,
+          text: r.missedQueryText,
+          intent: r.queryIntent,
+          modelsMissed: [r.model],
+          competitorsPresent: Object.keys(r.competitorCounts),
+        });
+      }
+    }
+
     Object.entries(r.competitorCounts).forEach(([name, count]) => {
       competitorCounts[name] = (competitorCounts[name] ?? 0) + count;
     });
   }
 
+  const queriesWithMention = Object.values(byModel).reduce((sum, m) => sum + m.mentioned, 0);
+  const totalQueries = queryCount * models.length;
+  const mentionRate = totalQueries > 0 ? Math.round((queriesWithMention / totalQueries) * 100) : 0;
+
+  // Count unique missed queries per intent layer for prompt context
+  const missedByIntent: Record<string, number> = {};
+  for (const detail of missedMap.values()) {
+    missedByIntent[detail.intent] = (missedByIntent[detail.intent] ?? 0) + 1;
+  }
+
   const runSummary: RunSummary = {
-    totalQueries: queryCount * models.length,
-    queriesWithMention: Object.values(byModel).reduce((sum, m) => sum + m.mentioned, 0),
+    totalQueries,
+    queriesWithMention,
+    mentionRate,
     byModel: Object.fromEntries(
       models.map((m) => [m, { total: queryCount, mentioned: byModel[m]?.mentioned ?? 0 }])
     ),
-    missedQueries: Array.from(missedSet),
+    missedQueries: Array.from(missedMap.values()),
     topCompetitorsMentioned: Object.entries(competitorCounts)
       .sort(([, a], [, b]) => b - a)
       .slice(0, 5)
       .map(([name]) => name),
+    missedByIntent,
   };
 
   try {
-    await generateRecommendations(clientId, brandName, runSummary);
+    await generateRecommendations(clientId, brandName, runSummary, versionId);
   } catch (err) {
     console.error("[runner] Recommendation generation failed:", err);
   }
@@ -761,6 +799,8 @@ export async function runTrackingForClient(
     for (let i = 0; i < mr.runsCreated; i++) {
       queryResults.push({
         model: mr.model,
+        queryId: "",            // batch result has no per-query breakdown
+        queryIntent: "problem_aware",
         runCreated: true,
         mentioned: i < mr.mentioned,
         missedQueryText: null,
@@ -770,6 +810,8 @@ export async function runTrackingForClient(
     for (const text of mr.missedQueryTexts) {
       queryResults.push({
         model: mr.model,
+        queryId: "",
+        queryIntent: "problem_aware",
         runCreated: false,
         mentioned: false,
         missedQueryText: text,

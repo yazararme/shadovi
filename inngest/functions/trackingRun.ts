@@ -94,8 +94,9 @@ export const trackingRunFunction = inngest.createFunction(
     }
 
     // ── Finalise: merge per-query results and generate recommendations ──────
+    // Pass versionId so generated recs are stamped with the active portfolio version.
     const result = await step.run("finalise", () =>
-      finaliseRun(clientId, ctx.brandName, ctx.queries.length, ctx.selectedModels as LLMModel[], allResults)
+      finaliseRun(clientId, ctx.brandName, ctx.queries.length, ctx.selectedModels as LLMModel[], allResults, ctx.versionId)
     );
 
     // Non-critical post-run step: cluster gap queries into named findings.
