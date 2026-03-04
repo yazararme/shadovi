@@ -19,58 +19,58 @@ import { computeBVI, type BVIScoreInput } from "@/lib/bvi/compute-bvi";
 // ── Constants ──────────────────────────────────────────────────────────────────
 
 const MODEL_LABELS: Record<LLMModel, string> = {
-  "gpt-4o":            "GPT-4o",
+  "gpt-4o": "GPT-4o",
   "claude-sonnet-4-6": "Claude",
-  "perplexity":        "Perplexity",
-  "gemini":            "Gemini",
-  "deepseek":          "DeepSeek",
+  "perplexity": "Perplexity",
+  "gemini": "Gemini",
+  "deepseek": "DeepSeek",
 };
 
 const MODEL_COLORS: Record<LLMModel, string> = {
-  "gpt-4o":            "#10a37f",
+  "gpt-4o": "#10a37f",
   "claude-sonnet-4-6": "#d4a27e",
-  "perplexity":        "#1fb6ff",
-  "gemini":            "#4285f4",
-  "deepseek":          "#6366f1",
+  "perplexity": "#1fb6ff",
+  "gemini": "#4285f4",
+  "deepseek": "#6366f1",
 };
 
 const MODEL_BADGE: Record<LLMModel, string> = {
-  "gpt-4o":            "bg-[rgba(16,163,127,0.08)] text-[#10a37f] border-[rgba(16,163,127,0.2)]",
+  "gpt-4o": "bg-[rgba(16,163,127,0.08)] text-[#10a37f] border-[rgba(16,163,127,0.2)]",
   "claude-sonnet-4-6": "bg-[rgba(212,162,126,0.08)] text-[#b5804a] border-[rgba(212,162,126,0.2)]",
-  "perplexity":        "bg-[rgba(31,182,255,0.08)] text-[#1580c0] border-[rgba(31,182,255,0.2)]",
-  "gemini":            "bg-[rgba(66,133,244,0.08)] text-[#4285f4] border-[rgba(66,133,244,0.2)]",
-  "deepseek":          "bg-[rgba(99,102,241,0.08)] text-[#6366f1] border-[rgba(99,102,241,0.2)]",
+  "perplexity": "bg-[rgba(31,182,255,0.08)] text-[#1580c0] border-[rgba(31,182,255,0.2)]",
+  "gemini": "bg-[rgba(66,133,244,0.08)] text-[#4285f4] border-[rgba(66,133,244,0.2)]",
+  "deepseek": "bg-[rgba(99,102,241,0.08)] text-[#6366f1] border-[rgba(99,102,241,0.2)]",
 };
 
 const INTENT_LABEL: Record<string, string> = {
   problem_aware: "Awareness",
-  category:      "Category",
-  comparative:   "Comparative",
-  validation:    "Validation",
+  category: "Category",
+  comparative: "Comparative",
+  validation: "Validation",
 };
 
 const INTENT_BADGE: Record<string, string> = {
   problem_aware: "bg-[rgba(31,182,255,0.08)] text-[#1580c0]  border-[rgba(31,182,255,0.2)]",
-  category:      "bg-[rgba(13,4,55,0.06)]    text-[#0D0437]  border-[rgba(13,4,55,0.15)]",
-  comparative:   "bg-[rgba(123,94,167,0.08)] text-[#7B5EA7]  border-[rgba(123,94,167,0.2)]",
-  validation:    "bg-[rgba(26,143,92,0.08)]  text-[#1A8F5C]  border-[rgba(26,143,92,0.2)]",
+  category: "bg-[rgba(13,4,55,0.06)]    text-[#0D0437]  border-[rgba(13,4,55,0.15)]",
+  comparative: "bg-[rgba(123,94,167,0.08)] text-[#7B5EA7]  border-[rgba(123,94,167,0.2)]",
+  validation: "bg-[rgba(26,143,92,0.08)]  text-[#1A8F5C]  border-[rgba(26,143,92,0.2)]",
 };
 
 const SENTIMENT_BADGE: Record<string, string> = {
   positive: "bg-[rgba(26,143,92,0.08)]  text-[#1A8F5C] border-[rgba(26,143,92,0.2)]",
-  neutral:  "bg-[#F4F6F9] text-[#6B7280] border-[#E2E8F0]",
+  neutral: "bg-[#F4F6F9] text-[#6B7280] border-[#E2E8F0]",
   negative: "bg-[rgba(255,75,110,0.08)] text-[#FF4B6E] border-[rgba(255,75,110,0.2)]",
 };
 
 const TYPE_LABEL: Record<string, string> = {
-  content_directive:  "CONTENT",
-  entity_foundation:  "ENTITY",
+  content_directive: "CONTENT",
+  entity_foundation: "ENTITY",
   placement_strategy: "PLACEMENT",
 };
 
 const TYPE_BADGE: Record<string, string> = {
-  content_directive:  "bg-[rgba(0,180,216,0.1)]   text-[#0077A8] border-[rgba(0,180,216,0.2)]",
-  entity_foundation:  "bg-[rgba(123,94,167,0.1)]  text-[#7B5EA7] border-[rgba(123,94,167,0.2)]",
+  content_directive: "bg-[rgba(0,180,216,0.1)]   text-[#0077A8] border-[rgba(0,180,216,0.2)]",
+  entity_foundation: "bg-[rgba(123,94,167,0.1)]  text-[#7B5EA7] border-[rgba(123,94,167,0.2)]",
   placement_strategy: "bg-[#F4F6F9] text-[#6B7280] border-[#E2E8F0]",
 };
 
@@ -79,7 +79,7 @@ const TYPE_BADGE: Record<string, string> = {
 // Unaided Visibility uses relative comparison against highest competitor rate
 const VISIBILITY_RELATIVE_MARGIN = 10; // pp below top competitor before turning red
 const FAVORABILITY_THRESHOLDS = { red: 50, green: 75 } as const;
-const KNOWLEDGE_THRESHOLDS    = { red: 70, green: 85 } as const;
+const KNOWLEDGE_THRESHOLDS = { red: 70, green: 85 } as const;
 
 // ── Helpers ────────────────────────────────────────────────────────────────────
 
@@ -113,7 +113,7 @@ function normalizeForMatch(s: string): string {
 
 function trafficLight(value: number, thresholds: { red: number; green: number }): string {
   if (value >= thresholds.green) return "text-[#1A8F5C]";
-  if (value >= thresholds.red)   return "text-[#F59E0B]";
+  if (value >= thresholds.red) return "text-[#F59E0B]";
   return "text-[#FF4B6E]";
 }
 
@@ -292,12 +292,12 @@ function OverviewInner() {
         .eq("client_id", c.id);
       if (activeVersionId) kScoresQ = kScoresQ.eq("version_id", activeVersionId);
       kScoresQ.then(({ data: kData }) => {
-          if (cancelled) return;
-          const rows = (kData ?? []) as { accuracy: string }[];
-          setKnowledgeCorrect(rows.filter((r) => r.accuracy === "correct").length);
-          setKnowledgeTotal(rows.length);
-          setKnowledgeLoading(false);
-        });
+        if (cancelled) return;
+        const rows = (kData ?? []) as { accuracy: string }[];
+        setKnowledgeCorrect(rows.filter((r) => r.accuracy === "correct").length);
+        setKnowledgeTotal(rows.length);
+        setKnowledgeLoading(false);
+      });
 
       // Recommendations (feeds: top priorities)
       supabase2
@@ -537,15 +537,15 @@ function OverviewInner() {
   const visibilityColor =
     competitorHighestRate !== null
       ? (() => {
-          const diff = unaidedRate - competitorHighestRate;
-          if (diff > 0) return "text-[#1A8F5C]";
-          if (diff >= -VISIBILITY_RELATIVE_MARGIN) return "text-[#F59E0B]";
-          return "text-[#FF4B6E]";
-        })()
+        const diff = unaidedRate - competitorHighestRate;
+        if (diff > 0) return "text-[#1A8F5C]";
+        if (diff >= -VISIBILITY_RELATIVE_MARGIN) return "text-[#F59E0B]";
+        return "text-[#FF4B6E]";
+      })()
       : undefined;
   const favorabilityColor = (!nssLoading && nss !== null)
     ? trafficLight(nss, FAVORABILITY_THRESHOLDS) : undefined;
-  const knowledgeColor   = (!knowledgeLoading && factAccuracyPct !== null)
+  const knowledgeColor = (!knowledgeLoading && factAccuracyPct !== null)
     ? trafficLight(factAccuracyPct, KNOWLEDGE_THRESHOLDS) : undefined;
 
   const nssInterp = nssLoading ? "" : nss !== null
@@ -677,9 +677,9 @@ function OverviewInner() {
       {hasNoData ? (
         <div className="border border-[#E2E8F0] rounded-xl p-10 bg-white text-center">
           <p className="text-[15px] font-semibold text-[#0D0437] mb-1">
-            Your first report is being generated
+            Click "Run Now" to generate your first report
           </p>
-          <p className="text-[13px] text-[#6B7280]">Check back in ~4 hours.</p>
+          <p className="text-[13px] text-[#6B7280]">Takes ~30 minutes</p>
         </div>
       ) : (
         <>
@@ -722,21 +722,21 @@ function OverviewInner() {
               value={bviLoading ? "—" : bviBaitRunsTotal > 0 && bviComposite !== null ? `${bviComposite}` : "—"}
               interpretation={
                 bviLoading ? "" :
-                bviBaitRunsTotal === 0
-                  ? "Add false claim tests in Brand Facts to enable."
-                  : bviComposite !== null && bviComposite <= 15
-                    ? "Low vulnerability — LLMs rarely confirm false claims."
-                    : bviComposite !== null && bviComposite <= 40
-                      ? "Moderate vulnerability — some false claims confirmed."
-                      : "High vulnerability — LLMs frequently confirm false claims."
+                  bviBaitRunsTotal === 0
+                    ? "Add false claim tests in Brand Facts to enable."
+                    : bviComposite !== null && bviComposite <= 15
+                      ? "Low vulnerability — LLMs rarely confirm false claims."
+                      : bviComposite !== null && bviComposite <= 40
+                        ? "Moderate vulnerability — some false claims confirmed."
+                        : "High vulnerability — LLMs frequently confirm false claims."
               }
               loading={bviLoading}
               href={`/dashboard/brand-knowledge${clientIdParam ? `?client=${clientIdParam}` : ""}`}
               valueColor={
                 !bviLoading && bviComposite !== null && bviBaitRunsTotal > 0
                   ? bviComposite <= 15 ? "text-[#1A8F5C]"
-                  : bviComposite <= 40 ? "text-[#F59E0B]"
-                  : "text-[#FF4B6E]"
+                    : bviComposite <= 40 ? "text-[#F59E0B]"
+                      : "text-[#FF4B6E]"
                   : undefined
               }
             />
