@@ -1,6 +1,7 @@
 "use client";
 
 import React, { useEffect, useState, Suspense } from "react";
+import { useSearchParams } from "next/navigation";
 import { useClientContext } from "@/context/ClientContext";
 import { createClient } from "@/lib/supabase/client";
 import {
@@ -171,7 +172,12 @@ interface DrawerState {
 // ── Main component ─────────────────────────────────────────────────────────────
 
 function OverviewInner() {
-  const { activeClientId: clientIdParam, isAdmin } = useClientContext();
+  const { activeClientId, isAdmin } = useClientContext();
+  const searchParams = useSearchParams();
+  // Prefer the URL ?client= param — it's set synchronously before render and is
+  // always correct. The context's activeClientId resolves asynchronously and may
+  // still be null on the first render after navigating from the onboarding flow.
+  const clientIdParam = searchParams.get("client") ?? activeClientId;
 
   // Client
   const [client, setClient] = useState<Client | null>(null);

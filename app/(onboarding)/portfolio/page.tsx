@@ -1240,11 +1240,12 @@ function PortfolioInner() {
       const supabase = createClient();
 
       // Steps 1+2: persist tracking config and mark client active
-      await supabase.from("clients").update({
+      const { error: activateError } = await supabase.from("clients").update({
         selected_models: selectedModels,
         tracking_frequency: selectedFrequency,
         status: "active",
       }).eq("id", clientId);
+      if (activateError) throw new Error(`Failed to activate client: ${activateError.message}`);
 
       // Step 3: query regeneration — guarded to protect pre-seeded portfolios.
       // The generate endpoint deletes all existing queries before inserting new ones,
