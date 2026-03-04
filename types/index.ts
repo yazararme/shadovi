@@ -91,7 +91,7 @@ export interface Competitor {
 }
 
 export type QueryIntent = "problem_aware" | "category" | "comparative" | "validation";
-export type QueryStatus = "pending_approval" | "active" | "paused" | "removed";
+export type QueryStatus = "pending_approval" | "active" | "paused" | "removed" | "inactive";
 export type FunnelStage = "awareness" | "consideration" | "decision";
 export type PhrasingStyle = "conversational" | "formal";
 // false_positive = fabricated claim; leading_negative = sceptical framing on a true feature

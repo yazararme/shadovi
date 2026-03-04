@@ -730,18 +730,31 @@ function LeftPanel({ queries, setQueries, activeIntent, setActiveIntent, clientI
   const [newQueryText, setNewQueryText] = useState("");
   const [newQueryPhrasingStyle, setNewQueryPhrasingStyle] = useState<"conversational" | "formal">("conversational");
 
-  function countForIntent(intent: QueryIntent) {
-    return queries.filter((q) => q.intent === intent && q.status !== "removed").length;
+  // A query is "visible" (user-active) if it hasn't been removed or soft-deactivated.
+  // "removed" covers legacy hard-deletes; "inactive" is the new soft-delete status.
+  function isActive(q: { status: string }) {
+    return q.status !== "removed" && q.status !== "inactive";
   }
 
-  const visibleQueries = queries.filter((q) => q.intent === activeIntent && q.status !== "removed");
-  const totalActive = queries.filter((q) => q.status !== "removed").length;
+  function countForIntent(intent: QueryIntent) {
+    return queries.filter((q) => q.intent === intent && isActive(q)).length;
+  }
+
+  const visibleQueries = queries.filter((q) => q.intent === activeIntent && isActive(q));
+  const totalActive = queries.filter(isActive).length;
   const intentLayerCount = INTENTS.filter((i) => countForIntent(i.key) > 0).length;
 
   function handleRemove(id: string) {
-    setQueries((prev) => prev.map((q) => q.id === id ? { ...q, status: "removed" } : q));
+    // Soft-deactivate locally so the card disappears immediately
+    setQueries((prev) => prev.map((q) => q.id === id ? { ...q, status: "inactive" } : q));
     const supabase = createClient();
-    supabase.from("queries").update({ status: "removed" }).eq("id", id);
+    // Soft-delete: status='inactive' + timestamp. deactivated_by_version is NOT set
+    // because this is a user action, not a version bump — the runner already ignores
+    // everything except status='active', so this exclusion is automatic on next run.
+    supabase.from("queries").update({
+      status: "inactive",
+      deactivated_at: new Date().toISOString(),
+    }).eq("id", id);
   }
 
   async function handleTextChange(id: string, text: string) {
@@ -924,7 +937,7 @@ function SettingsInner() {
         { data: facts, error: fErr },
       ] = await Promise.all([
         supabase.from("clients").select("*").eq("id", clientId).limit(1),
-        supabase.from("queries").select("*").eq("client_id", clientId).neq("status", "removed").order("created_at"),
+        supabase.from("queries").select("*").eq("client_id", clientId).neq("status", "removed").neq("status", "inactive").order("created_at"),
         supabase.from("personas").select("*").eq("client_id", clientId).order("priority"),
         supabase.from("competitors").select("*").eq("client_id", clientId).order("name"),
         supabase.from("brand_facts").select("*").eq("client_id", clientId).order("created_at"),
@@ -985,7 +998,7 @@ function SettingsInner() {
       // Refresh the query list to show newly generated queries
       const supabase = createClient();
       const { data: freshQueries } = await supabase
-        .from("queries").select("*").eq("client_id", clientId).neq("status", "removed").order("created_at");
+        .from("queries").select("*").eq("client_id", clientId).neq("status", "removed").neq("status", "inactive").order("created_at");
       setQueries(freshQueries ?? []);
     } catch {
       toast.error("Failed to regenerate queries — please try again.");
@@ -1042,7 +1055,7 @@ function SettingsInner() {
       setQueries((prev) => {
         const manual = prev.filter((q) => q.manually_added);
         const unaffected = prev.filter(
-          (q) => !q.manually_added && q.status !== "removed" && (intent === "all" ? false : q.intent !== intent)
+          (q) => !q.manually_added && isActive(q) && (intent === "all" ? false : q.intent !== intent)
         );
         return [...unaffected, ...(freshQueries as Query[]), ...manual];
       });
@@ -1117,7 +1130,7 @@ function SettingsInner() {
   const dna = client.brand_dna;
   const verifiedFacts = facts.filter((f) => f.is_true).length;
   const falseClaimTests = facts.filter((f) => !f.is_true).length;
-  const activeQueryCount = queries.filter((q) => q.status !== "removed").length;
+  const activeQueryCount = queries.filter((q) => q.status === "active").length;
   const monthlyCost = calcMonthlyCost(activeQueryCount, selectedModels, selectedFrequency);
 
   function toggleCard(id: ActiveModal) {
