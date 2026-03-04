@@ -235,6 +235,16 @@ export interface RunContext {
   versionId: string | null;
 }
 
+/** Result from processing a single query — returned by each step.run() and aggregated by finaliseRun. */
+export interface QueryStepResult {
+  model: LLMModel;
+  runCreated: boolean;
+  mentioned: boolean;
+  missedQueryText: string | null;
+  competitorCounts: Record<string, number>;
+}
+
+// Keep ModelBatchResult for backwards compat with runModelBatch / direct testing
 export interface ModelBatchResult {
   model: LLMModel;
   runsCreated: number;
@@ -335,404 +345,402 @@ export async function fetchRunContext(clientId: string): Promise<RunContext> {
   };
 }
 
-// ── Step 2 (per model): run all queries against one model ──────────────────────
+// ── Per-query processing ───────────────────────────────────────────────────────
 
 /**
- * Process all queries for a single model. Called once per model as a separate
- * Inngest step so each model's work has its own timeout and retry budget.
+ * Process a single query against a single model. This is the unit of work for
+ * each Inngest step — designed to complete within ~1-2 minutes (well under
+ * Vercel's 5-minute timeout).
+ *
+ * Returns a lightweight result object that gets aggregated in finaliseRun.
+ * The function is idempotent: the dedup guard at the top skips queries that
+ * already have a tracking_run for today, so retried steps don't create duplicates.
  */
-export async function runModelBatch(ctx: RunContext, model: LLMModel): Promise<ModelBatchResult> {
+export async function processOneQuery(
+  ctx: RunContext,
+  model: LLMModel,
+  query: RunContext["queries"][number]
+): Promise<QueryStepResult> {
   const supabase = createServiceClient();
-  const { clientId, brandName, queries, competitorList, facts, versionId } = ctx;
+  const { clientId, brandName, competitorList, facts, versionId } = ctx;
 
   // Rebuild factMap from the serialised facts array (Maps aren't JSON-serialisable)
   const factMap = new Map<string, BrandFact>();
   facts.forEach((f) => factMap.set(f.id, f));
 
-  let modelRunsCreated = 0;
-  let modelMentioned = 0;
-  const modelMissed: string[] = [];
-  const modelCompetitorCounts: Record<string, number> = {};
+  const result: QueryStepResult = {
+    model,
+    runCreated: false,
+    mentioned: false,
+    missedQueryText: null,
+    competitorCounts: {},
+  };
 
-  for (const query of queries as Pick<Query, "id" | "text" | "intent" | "fact_id" | "is_bait" | "version_id">[]) {
-    // Perplexity sonar-pro has a tight rate limit. A brief pause between serial
-    // queries prevents the burst from exhausting the limit and dropping queries.
+  // Perplexity sonar-pro has a tight rate limit. A brief pause before the call
+  // prevents bursts from exhausting the limit and dropping queries.
+  if (model === "perplexity") {
+    await new Promise((r) => setTimeout(r, 1_500));
+  }
+
+  // Dedup guard: skip if a tracking_run already exists for this query+model today.
+  // Inngest retries a step from the top when a transient error; without this check,
+  // already-inserted rows get duplicated on every retry.
+  const todayUTC = new Date().toISOString().slice(0, 10);
+  const tomorrowUTC = new Date(Date.now() + 86_400_000).toISOString().slice(0, 10);
+  const { count: existingCount } = await supabase
+    .from("tracking_runs")
+    .select("id", { count: "exact", head: true })
+    .eq("query_id", query.id)
+    .eq("client_id", clientId)
+    .eq("model", model)
+    .gte("created_at", `${todayUTC}T00:00:00.000Z`)
+    .lt("created_at", `${tomorrowUTC}T00:00:00.000Z`);
+  if ((existingCount ?? 0) > 0) {
+    console.log(`[runner] dedup skip query=${query.id} model=${model} — row exists for ${todayUTC}`);
+    return result;
+  }
+
+  // ── Primary LLM call ────────────────────────────────────────────────────
+  let rawResponse = "";
+  let perplexityCitations: string[] = [];
+  try {
     if (model === "perplexity") {
-      await new Promise((r) => setTimeout(r, 1_500));
-    }
-
-    // Dedup guard: skip if a tracking_run already exists for this query+model today.
-    // Inngest retries a step from the top when a transient error mid-loop; without
-    // this check, already-inserted rows get duplicated on every retry.
-    // Use UTC date bounds so the check is timezone-consistent with DB timestamps.
-    const todayUTC = new Date().toISOString().slice(0, 10);
-    const tomorrowUTC = new Date(Date.now() + 86_400_000).toISOString().slice(0, 10);
-    const { count: existingCount } = await supabase
-      .from("tracking_runs")
-      .select("id", { count: "exact", head: true })
-      .eq("query_id", query.id)
-      .eq("client_id", clientId)
-      .eq("model", model)
-      .gte("created_at", `${todayUTC}T00:00:00.000Z`)
-      .lt("created_at", `${tomorrowUTC}T00:00:00.000Z`);
-    if ((existingCount ?? 0) > 0) {
-      console.log(`[runner] dedup skip query=${query.id} model=${model} — row exists for ${todayUTC}`);
-      continue;
-    }
-
-    let rawResponse = "";
-    // Perplexity returns a native citations array in the API response alongside
-    // the message content. Capture it here so cited_sources reflects the
-    // authoritative list rather than regex extraction from the response text.
-    let perplexityCitations: string[] = [];
-    try {
-      if (model === "perplexity") {
-        const { text, citations } = await withTimeout(
-          callPerplexityFull(query.text),
-          PRIMARY_TIMEOUT_MS[model],
-          `${model} primary query=${query.id}`
-        );
-        rawResponse = text;
-        perplexityCitations = citations;
-      } else {
-        rawResponse = await withTimeout(
-          LLM_CALLERS[model](query.text),
-          PRIMARY_TIMEOUT_MS[model],
-          `${model} primary query=${query.id}`
-        );
-      }
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      console.error(`[runner] LLM error model=${model} query=${query.id}: ${msg}`);
-      continue;
-    }
-
-    const scored = scoreResponse(rawResponse, brandName, competitorList);
-
-    // Insert tracking_run row — select() returns the inserted row so we have its id
-    // for the knowledge scoring and enrichment steps below.
-    const { data: insertedRun, error: insertError } = await supabase
-      .from("tracking_runs")
-      .insert({
-        query_id: query.id,
-        client_id: clientId,
-        model,
-        raw_response: rawResponse,
-        brand_mentioned: scored.brand_mentioned,
-        mention_position: scored.mention_position,
-        mention_sentiment: scored.mention_sentiment,
-        competitors_mentioned: scored.competitors_mentioned,
-        // Perplexity returns an authoritative citations array in the API response;
-        // prefer that over the scorer's regex extraction from response text.
-        cited_sources: perplexityCitations.length > 0 ? perplexityCitations : scored.cited_sources,
-        share_of_model_score: scored.share_of_model_score,
-        // Denormalised fields stamped at insert time to avoid joins in downstream queries
-        query_intent: query.intent,
-        citation_present: perplexityCitations.length > 0 || (Array.isArray(scored.cited_sources) && scored.cited_sources.length > 0),
-        // version_id stamped from the active portfolio_versions record fetched before the loop.
-        version_id: versionId,
-      })
-      .select()
-      .single();
-
-    if (insertError) {
-      console.error("[runner] Insert error:", insertError.message);
+      const { text, citations } = await withTimeout(
+        callPerplexityFull(query.text),
+        PRIMARY_TIMEOUT_MS[model],
+        `${model} primary query=${query.id}`
+      );
+      rawResponse = text;
+      perplexityCitations = citations;
     } else {
-      modelRunsCreated++;
+      rawResponse = await withTimeout(
+        LLM_CALLERS[model](query.text),
+        PRIMARY_TIMEOUT_MS[model],
+        `${model} primary query=${query.id}`
+      );
+    }
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    console.error(`[runner] LLM error model=${model} query=${query.id}: ${msg}`);
+    result.missedQueryText = query.text;
+    return result;
+  }
 
-      // For validation queries anchored to a brand fact, run secondary Haiku scoring.
-      // Applied forward only — historical runs are not retroactively scored.
-      if (query.intent === "validation" && query.fact_id && insertedRun) {
-        const fact = factMap.get(query.fact_id);
-        if (fact) {
-          // ── Knowledge scoring (Haiku) ──────────────────────────────────
-          let ks;
-          try {
-            ks = await withTimeout(
-              scoreKnowledge(query.text, rawResponse, fact),
-              45_000,
-              `haiku-scorer query=${query.id}`
-            );
+  const scored = scoreResponse(rawResponse, brandName, competitorList);
 
-            // bait_triggered: the bait worked — LLM confirmed a false claim.
-            // NOTE: in our scorer, accuracy "incorrect" on a bait query means the LLM
-            // confirmed the false claim (NOT "correct"). The doc had this inverted.
-            const bait_triggered = (query.is_bait === true) && (ks.accuracy === "incorrect");
+  // ── Insert tracking_run ─────────────────────────────────────────────────
+  const { data: insertedRun, error: insertError } = await supabase
+    .from("tracking_runs")
+    .insert({
+      query_id: query.id,
+      client_id: clientId,
+      model,
+      raw_response: rawResponse,
+      brand_mentioned: scored.brand_mentioned,
+      mention_position: scored.mention_position,
+      mention_sentiment: scored.mention_sentiment,
+      competitors_mentioned: scored.competitors_mentioned,
+      cited_sources: perplexityCitations.length > 0 ? perplexityCitations : scored.cited_sources,
+      share_of_model_score: scored.share_of_model_score,
+      query_intent: query.intent,
+      citation_present: perplexityCitations.length > 0 || (Array.isArray(scored.cited_sources) && scored.cited_sources.length > 0),
+      version_id: versionId,
+    })
+    .select()
+    .single();
 
-            const { error: ksInsertError } = await supabase.from("brand_knowledge_scores").insert({
-              tracking_run_id: insertedRun.id,
-              fact_id: fact.id,
-              client_id: clientId,
-              accuracy: ks.accuracy,
-              completeness: ks.completeness,
-              hallucination: ks.hallucination,
-              notes: ks.notes,
-              scorer_model: ks.scorer_model,
-              bait_triggered,
-              brand_positioning: ks.brand_positioning,
-              version_id: versionId,
-            });
-            if (ksInsertError) {
-              console.error(
-                `[runner] brand_knowledge_scores insert failed model=${model} query=${query.id}: ${ksInsertError.message}`
-              );
-            }
+  if (insertError) {
+    console.error("[runner] Insert error:", insertError.message);
+    result.missedQueryText = query.text;
+    return result;
+  }
 
-            // Write brand_positioning back to tracking_run as well so it's available
-            // without joining brand_knowledge_scores in Coverage by Category queries.
-            const { error: bpUpdateError } = await supabase
-              .from("tracking_runs")
-              .update({ brand_positioning: ks.brand_positioning })
-              .eq("id", insertedRun.id);
-            if (bpUpdateError) {
-              console.error(
-                `[runner] brand_positioning update failed model=${model} query=${query.id}: ${bpUpdateError.message}`
-              );
-            }
-          } catch (err) {
-            console.error(
-              `[runner] Knowledge scoring failed model=${model} query=${query.id}: ${err instanceof Error ? err.message : String(err)}`
-            );
-          }
+  result.runCreated = true;
 
-          // ── Source Intelligence enrichment call ────────────────────────
-          // ENRICHMENT_ENABLED=true re-activates this block. Currently disabled:
-          // source_attribution / content_age_estimate / competitor_mentions_unprompted
-          // are not yet surfaced in the dashboard, so running 36+ extra primary-model
-          // calls per tracking run is pure cost/time waste at this stage.
-          // When the Source Intelligence dashboard panels are built, flip the flag.
-          if (process.env.ENRICHMENT_ENABLED === "true") {
-            try {
-              const enrichPrompt = buildEnrichmentPrompt(query.text, rawResponse, brandName);
-              const enrichRaw = await withTimeout(
-                LLM_CALLERS[model](enrichPrompt),
-                45_000,
-                `${model} enrichment query=${query.id}`
-              );
+  // ── Knowledge scoring (Haiku) — validation queries only ─────────────────
+  if (query.intent === "validation" && query.fact_id && insertedRun) {
+    const fact = factMap.get(query.fact_id);
+    if (fact) {
+      try {
+        const ks = await withTimeout(
+          scoreKnowledge(query.text, rawResponse, fact),
+          45_000,
+          `haiku-scorer query=${query.id}`
+        );
 
-              let enriched = parseEnrichmentJson(enrichRaw, model, query.id);
+        const bait_triggered = (query.is_bait === true) && (ks.accuracy === "incorrect");
 
-              if (!enriched) {
-                const retryPrompt =
-                  enrichPrompt +
-                  "\n\nReturn raw JSON only. No markdown, no code blocks, no explanation.";
-                const retryRaw = await withTimeout(
-                  LLM_CALLERS[model](retryPrompt),
-                  45_000,
-                  `${model} enrichment-retry query=${query.id}`
-                );
-                enriched = parseEnrichmentJson(retryRaw, model, `${query.id}/retry`);
-                if (!enriched) {
-                  console.error(
-                    `[runner] enrichment skipped after retry model=${model} query=${query.id}`
-                  );
-                }
-              }
-
-              if (enriched) {
-                await supabase
-                  .from("tracking_runs")
-                  .update({
-                    source_attribution: enriched.sources,
-                    content_age_estimate: enriched.content_age,
-                    competitor_mentions_unprompted: enriched.competitor_mentions,
-                  })
-                  .eq("id", insertedRun.id);
-              }
-            } catch (err) {
-              console.error(
-                `[runner] Enrichment call failed model=${model} query=${query.id}: ${err instanceof Error ? err.message : String(err)}`
-              );
-            }
-          }
+        const { error: ksInsertError } = await supabase.from("brand_knowledge_scores").insert({
+          tracking_run_id: insertedRun.id,
+          fact_id: fact.id,
+          client_id: clientId,
+          accuracy: ks.accuracy,
+          completeness: ks.completeness,
+          hallucination: ks.hallucination,
+          notes: ks.notes,
+          scorer_model: ks.scorer_model,
+          bait_triggered,
+          brand_positioning: ks.brand_positioning,
+          version_id: versionId,
+        });
+        if (ksInsertError) {
+          console.error(
+            `[runner] brand_knowledge_scores insert failed model=${model} query=${query.id}: ${ksInsertError.message}`
+          );
         }
+
+        const { error: bpUpdateError } = await supabase
+          .from("tracking_runs")
+          .update({ brand_positioning: ks.brand_positioning })
+          .eq("id", insertedRun.id);
+        if (bpUpdateError) {
+          console.error(
+            `[runner] brand_positioning update failed model=${model} query=${query.id}: ${bpUpdateError.message}`
+          );
+        }
+      } catch (err) {
+        console.error(
+          `[runner] Knowledge scoring failed model=${model} query=${query.id}: ${err instanceof Error ? err.message : String(err)}`
+        );
       }
 
-      // ── Competitive mention extraction (Haiku) ────────────────────────
-      // Runs on problem_aware, category, and comparative — all three intents where
-      // organic brand mentions are meaningful. Validation is still excluded
-      // (Beko-framed prompts; competitors are named explicitly, not discovered).
-      if ((query.intent === "problem_aware" || query.intent === "category" || query.intent === "comparative") && insertedRun) {
+      // ── Source Intelligence enrichment call ──────────────────────────
+      if (process.env.ENRICHMENT_ENABLED === "true") {
         try {
-          const extractionPrompt = buildExtractionPrompt(query.text, rawResponse);
-          const extractionRaw = await withTimeout(
-            callHaiku(extractionPrompt),
-            10_000,
-            `haiku-extraction query=${query.id}`
+          const enrichPrompt = buildEnrichmentPrompt(query.text, rawResponse, brandName);
+          const enrichRaw = await withTimeout(
+            LLM_CALLERS[model](enrichPrompt),
+            45_000,
+            `${model} enrichment query=${query.id}`
           );
 
-          const brands = parseExtractionJson(extractionRaw, query.id);
-          if (brands && brands.length > 0) {
-            const rows = brands.map((b) => ({
+          let enriched = parseEnrichmentJson(enrichRaw, model, query.id);
+
+          if (!enriched) {
+            const retryPrompt =
+              enrichPrompt +
+              "\n\nReturn raw JSON only. No markdown, no code blocks, no explanation.";
+            const retryRaw = await withTimeout(
+              LLM_CALLERS[model](retryPrompt),
+              45_000,
+              `${model} enrichment-retry query=${query.id}`
+            );
+            enriched = parseEnrichmentJson(retryRaw, model, `${query.id}/retry`);
+            if (!enriched) {
+              console.error(
+                `[runner] enrichment skipped after retry model=${model} query=${query.id}`
+              );
+            }
+          }
+
+          if (enriched) {
+            await supabase
+              .from("tracking_runs")
+              .update({
+                source_attribution: enriched.sources,
+                content_age_estimate: enriched.content_age,
+                competitor_mentions_unprompted: enriched.competitor_mentions,
+              })
+              .eq("id", insertedRun.id);
+          }
+        } catch (err) {
+          console.error(
+            `[runner] Enrichment call failed model=${model} query=${query.id}: ${err instanceof Error ? err.message : String(err)}`
+          );
+        }
+      }
+    }
+  }
+
+  // ── Competitive mention extraction (Haiku) ────────────────────────────
+  if ((query.intent === "problem_aware" || query.intent === "category" || query.intent === "comparative") && insertedRun) {
+    try {
+      const extractionPrompt = buildExtractionPrompt(query.text, rawResponse);
+      const extractionRaw = await withTimeout(
+        callHaiku(extractionPrompt),
+        10_000,
+        `haiku-extraction query=${query.id}`
+      );
+
+      const brands = parseExtractionJson(extractionRaw, query.id);
+      if (brands && brands.length > 0) {
+        const rows = brands.map((b) => ({
+          tracking_run_id: insertedRun.id,
+          query_id: query.id,
+          client_id: clientId,
+          model,
+          query_intent: query.intent,
+          brand_name_raw: b.brand,
+          brand_name: normaliseBrandName(b.brand),
+          is_tracked_brand:
+            normaliseBrandName(b.brand).toLowerCase() === brandName.toLowerCase(),
+          mention_context: b.context,
+          mention_sentiment: b.sentiment,
+          version_id: versionId,
+        }));
+
+        const { error: mentionInsertError } = await supabase
+          .from("response_brand_mentions")
+          .insert(rows);
+        if (mentionInsertError) {
+          console.error(
+            `[runner] response_brand_mentions insert failed model=${model} query=${query.id}: ${mentionInsertError.message}`
+          );
+        }
+
+        const unmatched = brands
+          .map((b) => b.brand)
+          .filter((raw) => !BRAND_NORMALISATION_MAP[raw.toLowerCase().trim()]);
+        if (unmatched.length > 0) {
+          console.log("[brand-normaliser] Unmatched brands (add to map):", unmatched);
+        }
+      }
+    } catch (err) {
+      console.error(
+        `[runner] Brand extraction failed model=${model} query=${query.id}: ${err instanceof Error ? err.message : String(err)}`
+      );
+    }
+  }
+
+  // ── Brand mention fallback scan ────────────────────────────────────────
+  if (!scored.brand_mentioned && insertedRun) {
+    const foundByFallback = rawResponse
+      .toLowerCase()
+      .includes(brandName.toLowerCase().trim());
+
+    if (foundByFallback) {
+      const { error: updateErr } = await supabase
+        .from("tracking_runs")
+        .update({ brand_mentioned: true })
+        .eq("id", insertedRun.id);
+      if (updateErr) {
+        console.error(
+          `[runner] fallback brand_mentioned update failed model=${model} query=${query.id}: ${updateErr.message}`
+        );
+      } else {
+        scored.brand_mentioned = true;
+
+        const { count: existingMentionCount } = await supabase
+          .from("response_brand_mentions")
+          .select("id", { count: "exact", head: true })
+          .eq("tracking_run_id", insertedRun.id)
+          .eq("is_tracked_brand", true);
+
+        if ((existingMentionCount ?? 0) === 0) {
+          const { error: rbmErr } = await supabase
+            .from("response_brand_mentions")
+            .insert({
               tracking_run_id: insertedRun.id,
               query_id: query.id,
               client_id: clientId,
               model,
               query_intent: query.intent,
-              brand_name_raw: b.brand,
-              brand_name: normaliseBrandName(b.brand),
-              is_tracked_brand:
-                normaliseBrandName(b.brand).toLowerCase() === brandName.toLowerCase(),
-              mention_context: b.context,
-              mention_sentiment: b.sentiment,
+              brand_name_raw: brandName,
+              brand_name: normaliseBrandName(brandName),
+              is_tracked_brand: true,
+              mention_context: "Detected by fallback string scan",
+              mention_sentiment: "unclear",
               version_id: versionId,
-            }));
-
-            const { error: mentionInsertError } = await supabase
-              .from("response_brand_mentions")
-              .insert(rows);
-            if (mentionInsertError) {
-              console.error(
-                `[runner] response_brand_mentions insert failed model=${model} query=${query.id}: ${mentionInsertError.message}`
-              );
-            }
-
-            // Log unmatched brand names so the normalisation map can be extended
-            const unmatched = brands
-              .map((b) => b.brand)
-              .filter((raw) => !BRAND_NORMALISATION_MAP[raw.toLowerCase().trim()]);
-            if (unmatched.length > 0) {
-              console.log("[brand-normaliser] Unmatched brands (add to map):", unmatched);
-            }
-          }
-        } catch (err) {
-          // Non-critical — log and continue; do not fail the run
-          console.error(
-            `[runner] Brand extraction failed model=${model} query=${query.id}: ${err instanceof Error ? err.message : String(err)}`
-          );
-        }
-      }
-
-      // ── Brand mention fallback scan ────────────────────────────────────
-      // The scorer uses an exact substring match against the stored brand_name,
-      // which can silently miss the brand if brand_name has surrounding whitespace
-      // or if the brand appears in a list/passing reference the structured
-      // extraction step skipped. If scorer said false, re-check with a trimmed
-      // case-insensitive scan and correct both tracking_runs and response_brand_mentions.
-      if (!scored.brand_mentioned && insertedRun) {
-        const foundByFallback = rawResponse
-          .toLowerCase()
-          .includes(brandName.toLowerCase().trim());
-
-        if (foundByFallback) {
-          // Correct the tracking_run record
-          const { error: updateErr } = await supabase
-            .from("tracking_runs")
-            .update({ brand_mentioned: true })
-            .eq("id", insertedRun.id);
-          if (updateErr) {
+            });
+          if (rbmErr) {
             console.error(
-              `[runner] fallback brand_mentioned update failed model=${model} query=${query.id}: ${updateErr.message}`
+              `[runner] fallback response_brand_mentions insert failed model=${model} query=${query.id}: ${rbmErr.message}`
             );
-          } else {
-            // Keep the in-memory scored value in sync so the summary counter is correct
-            scored.brand_mentioned = true;
-
-            // Insert a response_brand_mentions row only if extraction didn't already
-            // create one for this run (avoids duplicate is_tracked_brand rows)
-            const { count: existingCount } = await supabase
-              .from("response_brand_mentions")
-              .select("id", { count: "exact", head: true })
-              .eq("tracking_run_id", insertedRun.id)
-              .eq("is_tracked_brand", true);
-
-            if ((existingCount ?? 0) === 0) {
-              const { error: rbmErr } = await supabase
-                .from("response_brand_mentions")
-                .insert({
-                  tracking_run_id: insertedRun.id,
-                  query_id: query.id,
-                  client_id: clientId,
-                  model,
-                  query_intent: query.intent,
-                  brand_name_raw: brandName,
-                  brand_name: normaliseBrandName(brandName),
-                  is_tracked_brand: true,
-                  mention_context: "Detected by fallback string scan",
-                  mention_sentiment: "unclear",
-                  version_id: versionId,
-                });
-              if (rbmErr) {
-                console.error(
-                  `[runner] fallback response_brand_mentions insert failed model=${model} query=${query.id}: ${rbmErr.message}`
-                );
-              }
-            }
           }
         }
       }
     }
-
-    if (scored.brand_mentioned && scored.mention_sentiment !== "negative") {
-      modelMentioned++;
-    } else {
-      modelMissed.push(query.text);
-    }
-
-    scored.competitors_mentioned.forEach((name) => {
-      modelCompetitorCounts[name] = (modelCompetitorCounts[name] ?? 0) + 1;
-    });
   }
 
-  return {
-    model,
-    runsCreated: modelRunsCreated,
-    mentioned: modelMentioned,
-    missedQueryTexts: modelMissed,
-    competitorCounts: modelCompetitorCounts,
-  };
+  // ── Populate result ───────────────────────────────────────────────────
+  if (scored.brand_mentioned && scored.mention_sentiment !== "negative") {
+    result.mentioned = true;
+  } else {
+    result.missedQueryText = query.text;
+  }
+
+  scored.competitors_mentioned.forEach((name) => {
+    result.competitorCounts[name] = (result.competitorCounts[name] ?? 0) + 1;
+  });
+
+  return result;
 }
 
-// ── Step 3: finalise ───────────────────────────────────────────────────────────
+// ── Finalise: aggregate per-query results ──────────────────────────────────────
 
 /**
- * Merge per-model tallies into a RunSummary and generate AI recommendations.
- * Kept as a separate step so recommendations have their own timeout budget.
+ * Merge per-query step results into a RunSummary and generate AI recommendations.
+ * Accepts the flat array of QueryStepResult from all (model, query) steps.
  */
 export async function finaliseRun(
   clientId: string,
   brandName: string,
   queryCount: number,
-  modelResults: ModelBatchResult[]
+  models: LLMModel[],
+  queryResults: QueryStepResult[]
 ): Promise<{ runsCreated: number }> {
-  const runSummary: RunSummary = {
-    totalQueries: queryCount * modelResults.length,
-    queriesWithMention: 0,
-    byModel: {},
-    missedQueries: [],
-    topCompetitorsMentioned: [],
-  };
-
-  let runsCreated = 0;
+  // Group results by model for the summary
+  const byModel: Record<string, { mentioned: number }> = {};
   const competitorCounts: Record<string, number> = {};
+  const missedSet = new Set<string>();
+  let runsCreated = 0;
 
-  for (const result of modelResults) {
-    runsCreated += result.runsCreated;
-    runSummary.queriesWithMention += result.mentioned;
-    runSummary.byModel[result.model] = { total: queryCount, mentioned: result.mentioned };
-    // Deduplicate missed queries across models — only record each query text once
-    result.missedQueryTexts.forEach((t) => {
-      if (!runSummary.missedQueries.includes(t)) runSummary.missedQueries.push(t);
-    });
-    Object.entries(result.competitorCounts).forEach(([name, count]) => {
+  for (const r of queryResults) {
+    if (!byModel[r.model]) byModel[r.model] = { mentioned: 0 };
+    if (r.runCreated) runsCreated++;
+    if (r.mentioned) byModel[r.model].mentioned++;
+    if (r.missedQueryText) missedSet.add(r.missedQueryText);
+    Object.entries(r.competitorCounts).forEach(([name, count]) => {
       competitorCounts[name] = (competitorCounts[name] ?? 0) + count;
     });
   }
 
-  // Build top competitors list sorted by frequency
-  runSummary.topCompetitorsMentioned = Object.entries(competitorCounts)
-    .sort(([, a], [, b]) => b - a)
-    .slice(0, 5)
-    .map(([name]) => name);
+  const runSummary: RunSummary = {
+    totalQueries: queryCount * models.length,
+    queriesWithMention: Object.values(byModel).reduce((sum, m) => sum + m.mentioned, 0),
+    byModel: Object.fromEntries(
+      models.map((m) => [m, { total: queryCount, mentioned: byModel[m]?.mentioned ?? 0 }])
+    ),
+    missedQueries: Array.from(missedSet),
+    topCompetitorsMentioned: Object.entries(competitorCounts)
+      .sort(([, a], [, b]) => b - a)
+      .slice(0, 5)
+      .map(([name]) => name),
+  };
 
   try {
     await generateRecommendations(clientId, brandName, runSummary);
   } catch (err) {
-    // Recommendations are non-critical — log and continue
     console.error("[runner] Recommendation generation failed:", err);
   }
 
   return { runsCreated };
+}
+
+// ── Legacy: runModelBatch (kept for backwards-compat / direct testing) ─────────
+
+/**
+ * Process all queries for a single model in one call. This is the original
+ * monolithic approach — kept for direct testing and the thin orchestrator below.
+ * The Inngest function no longer calls this; it uses processOneQuery per step.
+ */
+export async function runModelBatch(ctx: RunContext, model: LLMModel): Promise<ModelBatchResult> {
+  let runsCreated = 0;
+  let mentioned = 0;
+  const missedQueryTexts: string[] = [];
+  const competitorCounts: Record<string, number> = {};
+
+  for (const query of ctx.queries) {
+    const r = await processOneQuery(ctx, model, query);
+    if (r.runCreated) runsCreated++;
+    if (r.mentioned) mentioned++;
+    if (r.missedQueryText) missedQueryTexts.push(r.missedQueryText);
+    Object.entries(r.competitorCounts).forEach(([name, count]) => {
+      competitorCounts[name] = (competitorCounts[name] ?? 0) + count;
+    });
+  }
+
+  return { model, runsCreated, mentioned, missedQueryTexts, competitorCounts };
 }
 
 // ── Thin orchestrator (kept for backwards-compat / direct testing) ─────────────
@@ -741,9 +749,34 @@ export async function runTrackingForClient(
   clientId: string
 ): Promise<{ runsCreated: number }> {
   const ctx = await fetchRunContext(clientId);
-  // Models run in parallel — same behaviour as before, just now composable as steps
   const modelResults = await Promise.all(
     ctx.selectedModels.map((model) => runModelBatch(ctx, model))
   );
-  return finaliseRun(clientId, ctx.brandName, ctx.queries.length, modelResults);
+
+  // Convert ModelBatchResult[] to QueryStepResult[] for finaliseRun
+  const queryResults: QueryStepResult[] = [];
+  for (const mr of modelResults) {
+    // Approximate: we don't have per-query granularity from the batch, but
+    // finaliseRun only needs aggregate counts which we can synthesise
+    for (let i = 0; i < mr.runsCreated; i++) {
+      queryResults.push({
+        model: mr.model,
+        runCreated: true,
+        mentioned: i < mr.mentioned,
+        missedQueryText: null,
+        competitorCounts: i === 0 ? mr.competitorCounts : {},
+      });
+    }
+    for (const text of mr.missedQueryTexts) {
+      queryResults.push({
+        model: mr.model,
+        runCreated: false,
+        mentioned: false,
+        missedQueryText: text,
+        competitorCounts: {},
+      });
+    }
+  }
+
+  return finaliseRun(clientId, ctx.brandName, ctx.queries.length, ctx.selectedModels as LLMModel[], queryResults);
 }
