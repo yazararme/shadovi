@@ -1237,23 +1237,24 @@ function PortfolioInner() {
     if (!clientId || !data) return;
     setActivating(true);
     try {
-      const supabase = createClient();
-
-      // Steps 1+2: persist tracking config and mark client active.
-      // Note: .select("id") is required to detect RLS silent-failure. Supabase
-      // returns error=null with 0 rows when RLS filters out the target row — the
-      // update looks successful but nothing was written. Checking data.length catches this.
-      const { data: activated, error: activateError } = await supabase
-        .from("clients")
-        .update({ selected_models: selectedModels, tracking_frequency: selectedFrequency, status: "active" })
-        .eq("id", clientId)
-        .select("id");
-      if (activateError) throw new Error(`Failed to activate client: ${activateError.message}`);
-      if (!activated?.length) throw new Error("Client activation failed — client not found or you do not have permission to activate it.");
+      // Steps 1+2: persist tracking config and mark client active via server route.
+      // Using a server endpoint (service client) rather than a browser Supabase call
+      // because browser clients can have session/apikey state issues that silently
+      // fail the update, and RLS returns error=null with 0 rows on denied writes.
+      const activateRes = await fetch("/api/clients/activate", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ clientId, selectedModels, selectedFrequency }),
+      });
+      if (!activateRes.ok) {
+        const { error } = await activateRes.json().catch(() => ({}));
+        throw new Error(error ?? "Client activation failed");
+      }
 
       // Step 3: query regeneration — guarded to protect pre-seeded portfolios.
       // The generate endpoint deletes all existing queries before inserting new ones,
       // so we must skip it when active queries already exist (admin-seeded accounts).
+      const supabase = createClient();
       const { count } = await supabase
         .from("queries")
         .select("*", { count: "exact", head: true })
