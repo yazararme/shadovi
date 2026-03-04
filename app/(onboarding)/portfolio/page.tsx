@@ -1239,13 +1239,17 @@ function PortfolioInner() {
     try {
       const supabase = createClient();
 
-      // Steps 1+2: persist tracking config and mark client active
-      const { error: activateError } = await supabase.from("clients").update({
-        selected_models: selectedModels,
-        tracking_frequency: selectedFrequency,
-        status: "active",
-      }).eq("id", clientId);
+      // Steps 1+2: persist tracking config and mark client active.
+      // Note: .select("id") is required to detect RLS silent-failure. Supabase
+      // returns error=null with 0 rows when RLS filters out the target row — the
+      // update looks successful but nothing was written. Checking data.length catches this.
+      const { data: activated, error: activateError } = await supabase
+        .from("clients")
+        .update({ selected_models: selectedModels, tracking_frequency: selectedFrequency, status: "active" })
+        .eq("id", clientId)
+        .select("id");
       if (activateError) throw new Error(`Failed to activate client: ${activateError.message}`);
+      if (!activated?.length) throw new Error("Client activation failed — client not found or you do not have permission to activate it.");
 
       // Step 3: query regeneration — guarded to protect pre-seeded portfolios.
       // The generate endpoint deletes all existing queries before inserting new ones,

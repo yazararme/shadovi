@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { createClient } from "@/lib/supabase/server";
+import { createClient, createServiceClient } from "@/lib/supabase/server";
 import { generateQueries } from "@/lib/synthetic-buyer/query-generator";
 import { createPortfolioVersion } from "@/lib/versioning/create-version";
 import type { ClientContext, BrandFact, VersionTrigger } from "@/types";
@@ -93,8 +93,12 @@ export async function POST(request: Request) {
 
     // Activate the client if it was still in onboarding. Makes generate/route the
     // single activation point — no separate /api/versioning/activate step needed.
+    // Use createServiceClient so RLS cannot silently swallow this write — session
+    // clients return error=null with 0 rows updated when the row is filtered by RLS.
+    // The user was already authenticated above so service role is safe here.
     if (clientRes.data.status === "onboarding") {
-      const { error: activateError } = await supabase
+      const svc = createServiceClient();
+      const { error: activateError } = await svc
         .from("clients")
         .update({ status: "active" })
         .eq("id", clientId);
