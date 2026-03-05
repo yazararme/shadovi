@@ -745,18 +745,18 @@ function LeftPanel({ queries, setQueries, activeIntent, setActiveIntent, clientI
   const intentLayerCount = INTENTS.filter((i) => countForIntent(i.key) > 0).length;
 
   async function handleRemove(id: string) {
-    // Optimistic update — card disappears immediately; reverted if the DB write fails
+    // Optimistic update — card disappears immediately; reverted if the API call fails
     setQueries((prev) => prev.map((q) => q.id === id ? { ...q, status: "inactive" } : q));
-    const supabase = createClient();
-    // Soft-delete: status='inactive' + timestamp. deactivated_by_version is NOT set
-    // because this is a user action, not a version bump — the runner already ignores
-    // everything except status='active', so this exclusion is automatic on next run.
-    const { error } = await supabase.from("queries").update({
-      status: "inactive",
-      deactivated_at: new Date().toISOString(),
-    }).eq("id", id);
-    if (error) {
-      console.error("[settings] Failed to deactivate query:", error.message, { id });
+    // Route through the API so the write uses the service client — browser-side Supabase
+    // updates are silently swallowed by RLS (returns success with 0 rows updated).
+    const res = await fetch("/api/queries/deactivate", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ queryId: id }),
+    });
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}));
+      console.error("[settings] Failed to deactivate query:", body.error, { id });
       setQueries((prev) => prev.map((q) => q.id === id ? { ...q, status: "active" } : q));
       toast.error("Failed to remove query — please try again.");
     }
