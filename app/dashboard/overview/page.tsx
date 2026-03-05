@@ -198,7 +198,8 @@ function OverviewInner() {
   const [knowledgeCorrect, setKnowledgeCorrect] = useState(0);
   const [knowledgeTotal, setKnowledgeTotal] = useState(0);
   const [recommendations, setRecommendations] = useState<Recommendation[]>([]);
-  const [trackedModels, setTrackedModels] = useState<LLMModel[]>([]);
+  // Derive from runs in render body instead of selected_models
+  const trackedModels = Array.from(new Set(runs.map((r) => r.model as LLMModel)));
   const [nss, setNss] = useState<number | null>(null);
   const [nssTotal, setNssTotal] = useState(0);
   const [sourceCount, setSourceCount] = useState(0);
@@ -240,7 +241,7 @@ function OverviewInner() {
         return;
       }
 
-      setTrackedModels((c.selected_models ?? []) as LLMModel[]);
+      // trackedModels now derived from runs in render body — no-op here
 
       // Fetch the active portfolio version before firing data queries so we can
       // filter tracking_runs and brand_knowledge_scores to the current version.
@@ -442,7 +443,8 @@ function OverviewInner() {
           })
           .filter((x): x is BVIScoreInput => x !== null);
 
-        const bviResult = computeBVI(bviInputs, (c.selected_models ?? []) as string[]);
+        const allModels = Array.from(new Set((bviRunModels ?? []).map((r: { id: string; model: LLMModel }) => r.model)));
+        const bviResult = computeBVI(bviInputs, allModels);
         setBviComposite(bviResult.composite);
         setBviBaitRunsTotal(bviResult.baitRunsTotal);
         setBviLoading(false);

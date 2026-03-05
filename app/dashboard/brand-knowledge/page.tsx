@@ -568,7 +568,8 @@ function BrandKnowledgeInner() {
     return { cat, total: catScores.length, correct: catCorrect, rate };
   }).filter((c) => c.total > 0);
 
-  const trackedModels = (client.selected_models ?? []) as LLMModel[];
+  // Derive from score data — show every model ever tracked
+  const trackedModels = Array.from(new Set(scores.map((s) => s.model as LLMModel)));
   const modelStats = trackedModels.map((model) => {
     const modelScores = mainScores.filter((s) => s.model === model);
     const modelCorrect = modelScores.filter((s) => s.accuracy === "correct").length;

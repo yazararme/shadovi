@@ -233,7 +233,8 @@ function OverviewInner() {
         })
         .filter((x): x is BVIScoreInput => x !== null);
 
-      const bviResult = computeBVI(bviInputs, (activeClient.selected_models ?? []) as string[]);
+      const allModels = Array.from(new Set((runData ?? []).map((r: TrackingRun) => r.model)));
+      const bviResult = computeBVI(bviInputs, allModels);
       setBviComposite(bviResult.composite);
       setBviBaitRunsTotal(bviResult.baitRunsTotal);
     }
@@ -391,7 +392,8 @@ function OverviewInner() {
       ),
     }));
 
-  const trackedModels = (client.selected_models ?? []) as LLMModel[];
+  // Derive from run data — show every model ever tracked, not just currently selected
+  const trackedModels = Array.from(new Set(runs.map((r) => r.model as LLMModel)));
 
   const mentionInsight =
     trendData.length < 2

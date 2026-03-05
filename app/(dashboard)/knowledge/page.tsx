@@ -361,8 +361,8 @@ function KnowledgeInner() {
     return { cat, total: catScores.length, correct: catCorrect, rate };
   }).filter((c) => c.total > 0);
 
-  // Model comparison
-  const trackedModels = (client.selected_models ?? []) as LLMModel[];
+  // Model comparison — derive from score data, not selected_models
+  const trackedModels = Array.from(new Set(scores.map((s) => s.model as LLMModel)));
   const modelStats = trackedModels.map((model) => {
     const modelScores = scores.filter((s) => s.model === model);
     const modelCorrect = modelScores.filter((s) => s.accuracy === "correct").length;

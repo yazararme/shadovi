@@ -492,7 +492,8 @@ function ReportDocument({ data, onRegenerate }: { data: ReportData; onRegenerate
     clusters, clusterQueryMap, clusterSourceRuns, knowledgeScores,
     domainStats, canonicalMap } = data;
 
-  const trackedModels = (client.selected_models ?? []) as LLMModel[];
+  // Derive from run data — show every model ever tracked
+  const trackedModels = Array.from(new Set(enrichedRuns.map((r) => r.model as LLMModel)));
   const brandName = client.brand_dna?.brand_name ?? client.brand_name ?? client.url;
 
   // ── Overview metrics (mirrors overview page, excludes validation intent) ────

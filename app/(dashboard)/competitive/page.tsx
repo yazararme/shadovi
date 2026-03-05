@@ -139,7 +139,8 @@ function CompetitiveInner() {
     );
   }
 
-  const trackedModels = (client.selected_models ?? []) as LLMModel[];
+  // Derive from run data — show every model ever tracked
+  const trackedModels = Array.from(new Set(enrichedRuns.map((r) => r.model as LLMModel)));
   const brandName = client.brand_dna?.brand_name ?? client.brand_name ?? "Your Brand";
 
   // Scope to unaided intents only; comparative + validation data stays in enrichedRuns for future sections
