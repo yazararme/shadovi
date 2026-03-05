@@ -368,7 +368,7 @@ function SourceIntelInner() {
       .select("id, query_id, model")
       .eq("client_id", activeClient.id)
       .limit(10000);
-    if (activeVersionId) runsQ = runsQ.eq("version_id", activeVersionId);
+    if (activeVersionId && !activeClient.show_all_versions) runsQ = runsQ.eq("version_id", activeVersionId);
     const { data: runsData } = await runsQ;
 
     const runs = (runsData ?? []) as RunRow[];

@@ -296,7 +296,7 @@ function ShareOfVoiceInner() {
 
       let runsQ = supabase.from("tracking_runs").select("*").eq("client_id", c.id)
         .order("ran_at", { ascending: false }).limit(10000);
-      if (activeVersionId) runsQ = runsQ.eq("version_id", activeVersionId);
+      if (activeVersionId && !c.show_all_versions) runsQ = runsQ.eq("version_id", activeVersionId);
 
       // Parallel fetches
       const [
@@ -359,7 +359,7 @@ function ShareOfVoiceInner() {
         if (allCQIds.length > 0) {
           let cRunQ = supabase.from("tracking_runs").select("*").in("query_id", allCQIds)
             .eq("client_id", c.id).order("ran_at", { ascending: false }).limit(5000);
-          if (activeVersionId) cRunQ = cRunQ.eq("version_id", activeVersionId);
+          if (activeVersionId && !c.show_all_versions) cRunQ = cRunQ.eq("version_id", activeVersionId);
           const { data: cRunData } = await cRunQ;
           if (cancelled) return;
           setClusterRuns((cRunData ?? []).map((r) => ({

@@ -46,7 +46,7 @@ const NAV_GROUPS: {
   {
     label: "ACCOUNT",
     items: [
-      { href: "/dashboard/settings", label: "Settings", Icon: Settings },
+      { href: "/dashboard/settings", label: "Tracking Setup", Icon: Settings },
     ],
   },
 ];

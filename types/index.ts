@@ -59,6 +59,7 @@ export interface Client {
   selected_models: LLMModel[];
   tracking_frequency: "daily" | "weekly" | "monthly";
   status: "onboarding" | "active" | "paused";
+  show_all_versions: boolean;
   created_at: string;
 }
 

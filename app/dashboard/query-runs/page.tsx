@@ -329,7 +329,7 @@ function QueryRunsInner() {
         .eq("client_id", activeClient.id)
         .order("ran_at", { ascending: false })
         .limit(5000);
-      if (activeVersionId) runsQ = runsQ.eq("version_id", activeVersionId);
+      if (activeVersionId && !activeClient.show_all_versions) runsQ = runsQ.eq("version_id", activeVersionId);
 
       const [{ data: runsData }, { data: queriesData }, { data: baitRows }] = await Promise.all([
         runsQ,
