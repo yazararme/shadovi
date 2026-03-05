@@ -744,17 +744,22 @@ function LeftPanel({ queries, setQueries, activeIntent, setActiveIntent, clientI
   const totalActive = queries.filter(isActive).length;
   const intentLayerCount = INTENTS.filter((i) => countForIntent(i.key) > 0).length;
 
-  function handleRemove(id: string) {
-    // Soft-deactivate locally so the card disappears immediately
+  async function handleRemove(id: string) {
+    // Optimistic update — card disappears immediately; reverted if the DB write fails
     setQueries((prev) => prev.map((q) => q.id === id ? { ...q, status: "inactive" } : q));
     const supabase = createClient();
     // Soft-delete: status='inactive' + timestamp. deactivated_by_version is NOT set
     // because this is a user action, not a version bump — the runner already ignores
     // everything except status='active', so this exclusion is automatic on next run.
-    supabase.from("queries").update({
+    const { error } = await supabase.from("queries").update({
       status: "inactive",
       deactivated_at: new Date().toISOString(),
     }).eq("id", id);
+    if (error) {
+      console.error("[settings] Failed to deactivate query:", error.message, { id });
+      setQueries((prev) => prev.map((q) => q.id === id ? { ...q, status: "active" } : q));
+      toast.error("Failed to remove query — please try again.");
+    }
   }
 
   async function handleTextChange(id: string, text: string) {
