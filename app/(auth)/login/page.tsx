@@ -26,16 +26,34 @@ export default function LoginPage() {
       setError(error.message);
       setLoading(false);
     } else {
-      // Route based on client status — active users go to dashboard, new/onboarding users go to setup
       const user = data.user;
       if (user) {
-        const { data: client } = await supabase
+        // Check junction table first — covers beta users mapped via admin panel
+        const { data: ucRows } = await supabase
+          .from("user_clients")
+          .select("client_id, clients(id, brand_name, status)")
+          .or(`user_id.eq.${user.id},email.eq.${user.email ?? ""}`);
+
+        const junctionClients = (ucRows ?? [])
+          .map((r) => r.clients as unknown as { id: string; status: string } | null)
+          .filter((c): c is { id: string; status: string } => c !== null);
+
+        // Also check direct ownership for admin/owner accounts
+        const { data: ownedClients } = await supabase
           .from("clients")
-          .select("status")
-          .eq("user_id", user.id)
-          .limit(1)
-          .single();
-        router.push(client?.status === "active" ? "/dashboard/overview" : "/discover");
+          .select("id, status")
+          .eq("user_id", user.id);
+
+        // Merge + deduplicate, prefer any active client
+        const allClients = [...junctionClients, ...(ownedClients ?? [])];
+        const unique = Array.from(new Map(allClients.map((c) => [c.id, c])).values());
+        const activeClient = unique.find((c) => c.status === "active");
+
+        if (activeClient) {
+          router.push(`/dashboard/overview?client=${activeClient.id}`);
+        } else {
+          router.push("/discover");
+        }
       } else {
         router.push("/discover");
       }

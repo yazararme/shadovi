@@ -1296,7 +1296,7 @@ function SettingsInner() {
               </div>
             </div>
 
-            {/* Live cost estimate */}
+            {/* Live cost estimate — hidden during beta/demo, re-enable when pricing is public
             <div className="bg-[#F4F6F9] rounded-lg px-3 py-2.5 space-y-0.5">
               <p className="text-sm font-semibold text-[#0D0437]">
                 ~£{monthlyCost.toFixed(2)}
@@ -1307,6 +1307,7 @@ function SettingsInner() {
                 {activeQueryCount} queries × {selectedModels.length} models × {selectedFrequency}
               </p>
             </div>
+            */}
           </div>
 
           {/* Action buttons */}

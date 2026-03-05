@@ -278,12 +278,14 @@ function QueriesPageInner() {
           <RefreshCw className={`h-3.5 w-3.5 mr-1.5 ${generating ? "animate-spin" : ""}`} />
           Regenerate All
         </Button>
+        {/* Cost estimate — hidden during beta/demo, re-enable when pricing is public
         <div className="text-right">
           <p className="text-[11px] text-[#6B7280]">
             {activeCount} queries · {selectedModels.length} models · {runsPerMonth}×/month
           </p>
           <p className="text-sm font-semibold text-[#0D0437]">~${estimatedCost.toFixed(2)}/month</p>
         </div>
+        */}
       </div>
 
       {/* 2-column: query list (left) + AI calibration panel (right) */}

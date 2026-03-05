@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { createClient, createServiceClient } from "@/lib/supabase/server";
+import { userHasClientAccess } from "@/lib/auth/check-client-access";
 import type { LLMModel } from "@/types";
 
 // Activates a client and persists tracking config.
@@ -20,13 +21,9 @@ export async function POST(request: Request) {
 
     if (!clientId) return NextResponse.json({ error: "clientId required" }, { status: 400 });
 
-    // Verify the user actually owns this client before using service role to write
-    const { data: owned } = await supabase
-      .from("clients")
-      .select("id")
-      .eq("id", clientId)
-      .single();
-    if (!owned) return NextResponse.json({ error: "Client not found or access denied" }, { status: 403 });
+    // Verify access (direct ownership or user_clients junction) before service-role write
+    const hasAccess = await userHasClientAccess(supabase, user.id, clientId);
+    if (!hasAccess) return NextResponse.json({ error: "Client not found or access denied" }, { status: 403 });
 
     // Service client bypasses RLS — safe because ownership is already confirmed above
     const svc = createServiceClient();
