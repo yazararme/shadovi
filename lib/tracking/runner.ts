@@ -323,7 +323,7 @@ export async function fetchRunContext(clientId: string): Promise<RunContext> {
       "brand_facts query"
     ),
     withTimeout(
-      supabase.from("portfolio_versions").select("id").eq("client_id", clientId).eq("is_active", true).single(),
+      supabase.from("portfolio_versions").select("id").eq("client_id", clientId).eq("is_active", true).limit(1).maybeSingle(),
       DB_TIMEOUT_MS,
       "portfolio_versions query"
     ),

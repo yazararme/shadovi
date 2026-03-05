@@ -422,14 +422,14 @@ function BrandKnowledgeInner() {
         .eq("client_id", activeClient.id)
         .order("scored_at", { ascending: false })
         .limit(5000);
-      if (activeVersionId && !activeClient.show_all_versions) scoresQ = scoresQ.eq("version_id", activeVersionId);
+      if (activeVersionId && !activeClient.show_all_versions) scoresQ = scoresQ.or(`version_id.eq.${activeVersionId},version_id.is.null`);
 
       let runsQ = supabase
         .from("tracking_runs")
         .select("id, query_id, model, raw_response")
         .eq("client_id", activeClient.id)
         .limit(10000);
-      if (activeVersionId && !activeClient.show_all_versions) runsQ = runsQ.eq("version_id", activeVersionId);
+      if (activeVersionId && !activeClient.show_all_versions) runsQ = runsQ.or(`version_id.eq.${activeVersionId},version_id.is.null`);
 
       const [{ data: rawScores }, { data: facts }, { data: runs }, { data: queries }] =
         await Promise.all([

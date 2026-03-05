@@ -264,7 +264,7 @@ function OverviewInner() {
         .from("tracking_runs")
         .select("*")
         .eq("client_id", c.id);
-      if (activeVersionId && !c.show_all_versions) runsQ = runsQ.eq("version_id", activeVersionId);
+      if (activeVersionId && !c.show_all_versions) runsQ = runsQ.or(`version_id.eq.${activeVersionId},version_id.is.null`);
       runsQ
         .order("ran_at", { ascending: false })
         .limit(5000)
@@ -291,7 +291,7 @@ function OverviewInner() {
         .from("brand_knowledge_scores")
         .select("accuracy")
         .eq("client_id", c.id);
-      if (activeVersionId && !c.show_all_versions) kScoresQ = kScoresQ.eq("version_id", activeVersionId);
+      if (activeVersionId && !c.show_all_versions) kScoresQ = kScoresQ.or(`version_id.eq.${activeVersionId},version_id.is.null`);
       kScoresQ.then(({ data: kData }) => {
         if (cancelled) return;
         const rows = (kData ?? []) as { accuracy: string }[];
@@ -340,7 +340,7 @@ function OverviewInner() {
       // Fetches run IDs first, then chunks run_sources queries to stay within URL limits
       (async () => {
         let runIdQ = supabase2.from("tracking_runs").select("id").eq("client_id", c.id);
-        if (activeVersionId && !c.show_all_versions) runIdQ = runIdQ.eq("version_id", activeVersionId);
+        if (activeVersionId && !c.show_all_versions) runIdQ = runIdQ.or(`version_id.eq.${activeVersionId},version_id.is.null`);
         const { data: runIdData } = await runIdQ;
         if (cancelled || !runIdData?.length) { setSourceLoading(false); return; }
 
@@ -406,10 +406,10 @@ function OverviewInner() {
           .from("brand_knowledge_scores")
           .select("fact_id, bait_triggered, tracking_run_id")
           .eq("client_id", c.id);
-        if (activeVersionId && !c.show_all_versions) bviScoresQ = bviScoresQ.eq("version_id", activeVersionId);
+        if (activeVersionId && !c.show_all_versions) bviScoresQ = bviScoresQ.or(`version_id.eq.${activeVersionId},version_id.is.null`);
 
         let bviRunsQ = supabase2.from("tracking_runs").select("id, model").eq("client_id", c.id);
-        if (activeVersionId && !c.show_all_versions) bviRunsQ = bviRunsQ.eq("version_id", activeVersionId);
+        if (activeVersionId && !c.show_all_versions) bviRunsQ = bviRunsQ.or(`version_id.eq.${activeVersionId},version_id.is.null`);
 
         const [{ data: bviScores }, { data: bviFacts }, { data: bviRunModels }] = await Promise.all([
           bviScoresQ,
