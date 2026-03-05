@@ -416,10 +416,12 @@ function ShareOfVoiceInner() {
   // ── Derived: filter bar ────────────────────────────────────────────────────
 
   const brandName = client.brand_dna?.brand_name ?? client.brand_name ?? "Your Brand";
-  const trackedModels = (client.selected_models ?? []) as LLMModel[];
 
-  // Models that actually have run data (used to populate model pills)
-  const availableModels = trackedModels.filter((m) => runs.some((r) => r.model === m));
+  // Derive models from actual run data — not client.selected_models — so the heatmap
+  // shows every model that has ever been tracked, regardless of current config.
+  const allRunModels = Array.from(new Set(runs.map((r) => r.model as LLMModel)));
+  const trackedModels = allRunModels;
+  const availableModels = allRunModels;
 
   // Effective model set: null state = all available
   const effectiveModelSet: Set<LLMModel> = selectedModels ?? new Set(availableModels);
