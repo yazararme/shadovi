@@ -67,7 +67,12 @@ export async function POST(request: Request) {
     // Soft-deactivate existing queries rather than hard-deleting them.
     // Historical tracking_runs still reference these query rows via query_id, so hard
     // deletion would orphan them. Soft-delete preserves the historical data chain.
-    const { error: deactivateError } = await supabase
+    // Use createServiceClient for the same reason as the client activation block below —
+    // session clients are subject to RLS and silently return 0 rows updated when the
+    // policy filters out the rows, making the deactivation appear to succeed while nothing
+    // actually changes.
+    const svcForDeactivate = createServiceClient();
+    const { error: deactivateError } = await svcForDeactivate
       .from("queries")
       .update({
         status:                "inactive",
