@@ -2,6 +2,11 @@ import { z } from "zod";
 import { callHaiku } from "@/lib/llm/anthropic";
 import type { ClientContext, Query, QueryIntent, FunnelStage, PhrasingStyle, BrandFact, BaitType } from "@/types";
 
+// Every generation/regeneration must include at least this many bait queries.
+// If the LLM pipeline produces fewer (e.g. because Haiku omits fact_ids),
+// deterministic bait queries are injected from is_true=false brand facts.
+const MIN_BAIT_QUERIES = 2;
+
 const QuerySchema = z.object({
   text: z.string(),
   intent: z.enum(["problem_aware", "category", "comparative", "validation"]),
@@ -131,6 +136,70 @@ Return ONLY a valid JSON array. No markdown, no explanation.
 
 Queries to review:
 ${JSON.stringify(queries, null, 2)}`;
+}
+
+// Post-pipeline guarantee: if the LLM failed to produce enough bait queries (e.g. omitted
+// fact_ids, critic reordered and broke index alignment), inject deterministic bait queries
+// from is_true=false brand facts so every generation ships with hallucination detection.
+type GeneratedQuery = Omit<Query, "id" | "client_id" | "created_at" | "status" | "version_id">;
+
+function ensureMinBaitQueries(
+  queries: GeneratedQuery[],
+  factLookup: Map<string, BrandFact>
+): GeneratedQuery[] {
+  const baitCount = queries.filter((q) => q.is_bait).length;
+  if (baitCount >= MIN_BAIT_QUERIES) return queries;
+
+  // Collect bait facts not already backing an existing bait query
+  const usedBaitFactIds = new Set(
+    queries.filter((q) => q.is_bait && q.fact_id).map((q) => q.fact_id)
+  );
+  const availableBaitFacts = Array.from(factLookup.values())
+    .filter((f) => !f.is_true && !usedBaitFactIds.has(f.id));
+
+  if (availableBaitFacts.length === 0) {
+    console.warn(
+      "[query-generator] No bait facts (is_true=false) available — cannot guarantee minimum bait queries"
+    );
+    return queries;
+  }
+
+  const needed = MIN_BAIT_QUERIES - baitCount;
+  const factsToUse = availableBaitFacts.slice(0, needed);
+
+  const syntheticBait: GeneratedQuery[] = factsToUse.map((fact) => ({
+    text: `Is it true that ${fact.claim.replace(/[.!?]+$/, "")}?`,
+    intent: "validation" as QueryIntent,
+    funnel_stage: "decision" as FunnelStage,
+    phrasing_style: "conversational" as PhrasingStyle,
+    rationale: null,
+    strategic_goal: null,
+    persona_id: null,
+    relevance_score: null,
+    fact_id: fact.id,
+    is_bait: true,
+    bait_type: "false_positive" as BaitType,
+    source_persona: null,
+    manually_added: false,
+  }));
+
+  const validation = queries.filter((q) => q.intent === "validation");
+  const nonValidation = queries.filter((q) => q.intent !== "validation");
+
+  if (validation.length + syntheticBait.length <= 8) {
+    // Under the 8-per-intent cap — just append
+    return [...nonValidation, ...validation, ...syntheticBait];
+  }
+
+  // At cap — replace the lowest-scoring non-bait validation queries
+  const nonBaitValidation = validation
+    .filter((q) => !q.is_bait)
+    .sort((a, b) => (a.relevance_score ?? 5) - (b.relevance_score ?? 5));
+  const dropCount = Math.min(syntheticBait.length, nonBaitValidation.length);
+  const toDrop = new Set(nonBaitValidation.slice(0, dropCount));
+  const keptValidation = validation.filter((q) => !toDrop.has(q));
+
+  return [...nonValidation, ...keptValidation, ...syntheticBait];
 }
 
 // Builds a generation prompt scoped to specific intent layers with a calibration instruction
@@ -349,7 +418,7 @@ export async function calibrateQueries(
       .slice(0, 8)
   );
 
-  return trimmed.map((q) => {
+  const result = trimmed.map((q) => {
     const validFactId = q.fact_id && factLookup.has(q.fact_id) ? q.fact_id : null;
     if (q.fact_id && !validFactId) {
       console.warn(
@@ -369,6 +438,12 @@ export async function calibrateQueries(
       source_persona: null, manually_added: false,
     };
   });
+
+  // Only enforce bait minimum when validation intent is being regenerated
+  if (intents.includes("validation")) {
+    return ensureMinBaitQueries(result, factLookup);
+  }
+  return result;
 }
 
 export async function generateQueries(
@@ -479,7 +554,7 @@ export async function generateQueries(
       .slice(0, 8)
   );
 
-  return trimmed.map((q) => {
+  const result = trimmed.map((q) => {
     // Validate fact_id against the live factLookup — the LLM can corrupt UUIDs
     // (typos, hallucinated IDs) which would fail the queries_fact_id_fkey constraint.
     const validFactId = q.fact_id && factLookup.has(q.fact_id) ? q.fact_id : null;
@@ -505,4 +580,9 @@ export async function generateQueries(
       manually_added: false,
     };
   });
+
+  // Guarantee minimum bait queries — if the LLM omitted fact_ids or the critic
+  // broke index alignment, bait designation is lost. This injects deterministic
+  // bait queries from is_true=false facts so every generation has hallucination detection.
+  return ensureMinBaitQueries(result, factLookup);
 }

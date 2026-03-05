@@ -971,17 +971,23 @@ function SettingsInner() {
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, [activeModal]);
 
-  // Auto-save tracking config immediately when models/frequency are toggled
+  // Auto-save tracking config via API route — uses service client to bypass RLS,
+  // which silently drops the update for beta users (UPDATE policy = user_id = auth.uid()).
   async function saveTrackingWith(models: LLMModel[], freq: "daily" | "weekly" | "monthly") {
     if (!clientId || models.length === 0) return;
     setSavingTracking(true);
     try {
-      const supabase = createClient();
-      await supabase.from("clients")
-        .update({ selected_models: models, tracking_frequency: freq })
-        .eq("id", clientId);
-    } catch {
-      toast.error("Failed to save tracking settings");
+      const res = await fetch("/api/clients/update-tracking", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ clientId, selectedModels: models, trackingFrequency: freq }),
+      });
+      if (!res.ok) {
+        const { error } = await res.json();
+        throw new Error(error ?? "Save failed");
+      }
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Failed to save tracking settings");
     } finally {
       setSavingTracking(false);
     }
