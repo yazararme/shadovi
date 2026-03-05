@@ -37,8 +37,15 @@ function buildGenerationPrompt(ctx: ClientContext, brandFacts?: BrandFact[]): st
     )
     .join("\n\n");
 
-  // Cap brand facts at 8 so validation never exceeds its intent slot.
-  const cappedFacts = brandFacts ? brandFacts.slice(0, 8) : undefined;
+  // Always include all bait facts (is_true=false) — they are critical for BVI scoring.
+  // Fill remaining slots up to 8 with real facts. Bait facts come first so slice never drops them.
+  const cappedFacts = brandFacts
+    ? (() => {
+        const bait = brandFacts.filter((f) => !f.is_true);
+        const real = brandFacts.filter((f) => f.is_true);
+        return [...bait, ...real].slice(0, Math.max(8, bait.length));
+      })()
+    : undefined;
 
   // When brand facts are provided, the validation layer generates one query per fact
   // so scoring can be anchored to a specific known claim rather than guessing the mapping.
@@ -150,7 +157,14 @@ function buildCalibrationPrompt(
     )
     .join("\n\n");
 
-  const cappedFacts = brandFacts ? brandFacts.slice(0, 8) : undefined;
+  // Same bait-first prioritisation as buildGenerationPrompt — bait facts must not be dropped.
+  const cappedFacts = brandFacts
+    ? (() => {
+        const bait = brandFacts.filter((f) => !f.is_true);
+        const real = brandFacts.filter((f) => f.is_true);
+        return [...bait, ...real].slice(0, Math.max(8, bait.length));
+      })()
+    : undefined;
 
   const intentSections: string[] = [];
   let totalQueries = 0;
