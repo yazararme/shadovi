@@ -103,6 +103,13 @@ export function QueryCard({ query, onRemove, onTextChange, autoEdit = false }: P
                 </span>
               )}
 
+              {/* Bait indicator — hallucination detection query */}
+              {query.is_bait && (
+                <span className="inline-flex items-center rounded-md border border-red-200 bg-red-50 px-2 py-0.5 text-xs font-medium text-red-700">
+                  Bait
+                </span>
+              )}
+
               <Badge variant="outline" className="text-xs font-normal capitalize">
                 {query.phrasing_style}
               </Badge>
