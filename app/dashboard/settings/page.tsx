@@ -1055,7 +1055,7 @@ function SettingsInner() {
       setQueries((prev) => {
         const manual = prev.filter((q) => q.manually_added);
         const unaffected = prev.filter(
-          (q) => !q.manually_added && isActive(q) && (intent === "all" ? false : q.intent !== intent)
+          (q) => !q.manually_added && q.status !== "removed" && q.status !== "inactive" && (intent === "all" ? false : q.intent !== intent)
         );
         return [...unaffected, ...(freshQueries as Query[]), ...manual];
       });
