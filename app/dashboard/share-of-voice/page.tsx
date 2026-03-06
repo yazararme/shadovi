@@ -298,21 +298,17 @@ function ShareOfVoiceInner() {
         .order("ran_at", { ascending: false }).limit(10000);
       if (activeVersionId && !c.show_all_versions) runsQ = runsQ.or(`version_id.eq.${activeVersionId},version_id.is.null`);
 
-      // Parallel fetches
+      // Parallel fetches (rbm excluded — needs run query_ids for version scoping)
       const [
         { data: runData },
         { data: queryData },
         { data: compData },
-        { data: rbmData },
         { data: clusterData },
         { data: recData },
       ] = await Promise.all([
         runsQ,
         supabase.from("queries").select("id, text, intent").eq("client_id", c.id).limit(2000),
         supabase.from("competitors").select("*").eq("client_id", c.id).order("name"),
-        supabase.from("response_brand_mentions")
-          .select("query_id, model, brand_name, is_tracked_brand, query_intent")
-          .eq("client_id", c.id).limit(20000),
         supabase.from("gap_clusters").select("*").eq("client_id", c.id)
           .order("run_date", { ascending: false }).limit(20),
         supabase.from("recommendations").select("id, query_id, type, title, status")
@@ -321,18 +317,25 @@ function ShareOfVoiceInner() {
 
       if (cancelled) return;
 
+      // Fetch rbm scoped to version-filtered runs to avoid PostgREST row-limit truncation
+      const runQueryIds = [...new Set((runData ?? []).map((r: { query_id: string }) => r.query_id))];
+      let rbmData: RbmRow[] | null = null;
+      if (runQueryIds.length > 0) {
+        const { data } = await supabase
+          .from("response_brand_mentions")
+          .select("query_id, model, brand_name, is_tracked_brand, query_intent")
+          .eq("client_id", c.id)
+          .in("query_id", runQueryIds)
+          .limit(20000);
+        rbmData = data as RbmRow[] | null;
+      }
+
       const queryMap = Object.fromEntries((queryData ?? []).map((q) => [q.id, q]));
       const enriched = (runData ?? []).map((r) => ({
         ...(r as TrackingRun),
         query_text: (queryMap[r.query_id]?.text ?? "") as string,
       }));
       setRuns(enriched);
-
-      // DEBUG: inspect raw rbmData at fetch time
-      const deepseekRows = (rbmData ?? []).filter((r: RbmRow) => r.model === 'deepseek');
-      console.log("total deepseek rbm rows fetched:", deepseekRows.length);
-      console.log("deepseek brand_names:", [...new Set(deepseekRows.map((r: RbmRow) => r.brand_name))].sort());
-      console.log("deepseek brand_name char codes sample:", deepseekRows.find((r: RbmRow) => r.brand_name.toLowerCase().includes('userguiding'))?.brand_name.split('').map((c: string) => c.charCodeAt(0)));
 
       const rbm = (rbmData ?? []) as RbmRow[];
       setRbmRows(rbm);
@@ -423,9 +426,6 @@ function ShareOfVoiceInner() {
 
   const brandName = client.brand_dna?.brand_name ?? client.brand_name ?? "Your Brand";
 
-  // DEBUG canary — confirms we passed the early returns
-  console.log("🔥 SOV RENDER — runs:", runs.length, "client:", client?.brand_name);
-
   // Derive models from actual run data — not client.selected_models — so the heatmap
   // shows every model that has ever been tracked, regardless of current config.
   const allRunModels = Array.from(new Set(runs.map((r) => r.model as LLMModel)));
@@ -471,25 +471,11 @@ function ShareOfVoiceInner() {
       ? sovRuns.filter((r) => r.query_intent !== null && SOV_INTENTS.includes(r.query_intent as QueryIntent))
       : sovRuns.filter((r) => r.query_intent === intentFilter);
 
-  console.log("filteredRuns by model:",
-    ["deepseek","gemini","claude-sonnet-4-6","perplexity","gpt-4o"].map(m => ({
-      model: m,
-      count: filteredRuns.filter(r => r.model === m).length
-    }))
-  );
-
   // Set of query_id:model pairs in the filtered scope
   const filteredQMPairs = new Set(filteredRuns.map((r) => `${r.query_id}:${r.model}`));
 
   // Filtered rbm rows — only those whose (query_id, model) appear in filteredRuns
   const filteredRbm = rbmRows.filter((r) => filteredQMPairs.has(`${r.query_id}:${r.model}`));
-
-  // DEBUG: check rbm rows before filteredQMPairs intersection
-  const deepseekUGRbm = rbmRows.filter(r => r.model === 'deepseek' && r.brand_name.toLowerCase() === 'userguiding');
-  console.log("deepseek UG rbm rows:", deepseekUGRbm.length);
-  console.log("deepseek UG in filteredQMPairs:", deepseekUGRbm.filter(r => filteredQMPairs.has(`${r.query_id}:${r.model}`)).length);
-  console.log("sample deepseek UG query_id:model:", deepseekUGRbm.slice(0,3).map(r => `${r.query_id}:${r.model}`));
-  console.log("filteredQMPairs has deepseek entries:", [...filteredQMPairs].filter(k => k.includes('deepseek')).length);
 
   // Build heatmap rows — "No Brand Visible" is a special meta-row appended last
   const heatmapRows: HeatmapRow[] = [
@@ -500,12 +486,6 @@ function ShareOfVoiceInner() {
   const noBrandRowIdx = heatmapRows.length - 1;
   const lowerBrandName = brandName.toLowerCase();
 
-  // DEBUG: brand row heatmap investigation
-  console.log("filteredRbm total rows:", filteredRbm.length);
-  console.log("filteredRbm userguiding rows:", filteredRbm.filter(r => r.brand_name.toLowerCase() === "userguiding").length);
-  console.log("lowerBrandName:", lowerBrandName);
-  console.log("filteredRuns total:", filteredRuns.length);
-
   for (const model of trackedModels) {
     const modelRuns = filteredRuns.filter((r) => r.model === model);
     const total = modelRuns.length;
@@ -515,7 +495,6 @@ function ShareOfVoiceInner() {
     const brandMentionedQIds = new Set(
       filteredRbm.filter((r) => r.brand_name.toLowerCase() === lowerBrandName && r.model === model).map((r) => r.query_id)
     );
-    console.log(`model: ${model}, modelRuns: ${modelRuns.length}, brandMentionedQIds size: ${brandMentionedQIds.size}, total: ${total}`);
     const brandCount = modelRuns.filter((r) => brandMentionedQIds.has(r.query_id)).length;
     heatmapRows[0].byModel[model] = {
       mentionRate: total > 0 ? Math.round((brandCount / total) * 100) : 0,
