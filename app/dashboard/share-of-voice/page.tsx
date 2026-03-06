@@ -478,6 +478,13 @@ function ShareOfVoiceInner() {
   // Filtered rbm rows — only those whose (query_id, model) appear in filteredRuns
   const filteredRbm = rbmRows.filter((r) => filteredQMPairs.has(`${r.query_id}:${r.model}`));
 
+  // DEBUG: check rbm rows before filteredQMPairs intersection
+  const deepseekUGRbm = rbmRows.filter(r => r.model === 'deepseek' && r.brand_name.toLowerCase() === 'userguiding');
+  console.log("deepseek UG rbm rows:", deepseekUGRbm.length);
+  console.log("deepseek UG in filteredQMPairs:", deepseekUGRbm.filter(r => filteredQMPairs.has(`${r.query_id}:${r.model}`)).length);
+  console.log("sample deepseek UG query_id:model:", deepseekUGRbm.slice(0,3).map(r => `${r.query_id}:${r.model}`));
+  console.log("filteredQMPairs has deepseek entries:", [...filteredQMPairs].filter(k => k.includes('deepseek')).length);
+
   // Build heatmap rows — "No Brand Visible" is a special meta-row appended last
   const heatmapRows: HeatmapRow[] = [
     { name: brandName, isBrand: true, byModel: {} },
