@@ -317,25 +317,26 @@ function ShareOfVoiceInner() {
 
       if (cancelled) return;
 
-      // Fetch rbm scoped to version-filtered runs to avoid PostgREST row-limit truncation
+      // Fetch rbm scoped to version-filtered runs, paginated to bypass PostgREST 1000-row cap
       const runQueryIds = [...new Set((runData ?? []).map((r: { query_id: string }) => r.query_id))];
-      let rbmData: RbmRow[] | null = null;
+      const allRbm: RbmRow[] = [];
       if (runQueryIds.length > 0) {
-        const { data, error: rbmError } = await supabase
-          .from("response_brand_mentions")
-          .select("query_id, model, brand_name, is_tracked_brand, query_intent")
-          .eq("client_id", c.id)
-          .in("query_id", runQueryIds)
-          .limit(20000);
-        rbmData = data as RbmRow[] | null;
-        console.log("DEBUG rbm fetch:", {
-          runQueryIdsCount: runQueryIds.length,
-          rbmRowsReturned: rbmData?.length ?? 0,
-          rbmError,
-          deepseekRows: (rbmData ?? []).filter((r: RbmRow) => r.model === "deepseek").length,
-          deepseekBrands: [...new Set((rbmData ?? []).filter((r: RbmRow) => r.model === "deepseek").map((r: RbmRow) => r.brand_name))].sort(),
-        });
+        const PAGE_SIZE = 1000;
+        let from = 0;
+        while (true) {
+          const { data } = await supabase
+            .from("response_brand_mentions")
+            .select("query_id, model, brand_name, is_tracked_brand, query_intent")
+            .eq("client_id", c.id)
+            .in("query_id", runQueryIds)
+            .range(from, from + PAGE_SIZE - 1);
+          const page = (data ?? []) as RbmRow[];
+          allRbm.push(...page);
+          if (page.length < PAGE_SIZE) break;
+          from += PAGE_SIZE;
+        }
       }
+      const rbmData = allRbm;
 
       const queryMap = Object.fromEntries((queryData ?? []).map((q) => [q.id, q]));
       const enriched = (runData ?? []).map((r) => ({
@@ -344,7 +345,7 @@ function ShareOfVoiceInner() {
       }));
       setRuns(enriched);
 
-      const rbm = (rbmData ?? []) as RbmRow[];
+      const rbm = rbmData;
       setRbmRows(rbm);
       setBrandQMSet(new Set(rbm.filter((r) => r.is_tracked_brand).map((r) => `${r.query_id}:${r.model}`)));
 
