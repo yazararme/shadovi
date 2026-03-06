@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { createClient } from "@/lib/supabase/server";
+import { createClient, createServiceClient } from "@/lib/supabase/server";
 import { scrapeUrl } from "@/lib/ingestion/scraper";
 import { extractBrandDNA } from "@/lib/ingestion/extractor";
 
@@ -121,10 +121,15 @@ export async function POST(request: Request) {
     // to the correct entity even when supplementary content (sub-brands, partner sites) is richer.
     const brandDNA = await extractBrandDNA(combinedContent, url ?? undefined);
 
+    // Service client bypasses RLS — safe because user ownership is confirmed above.
+    // Session-scoped client's JWT can go stale during the long scrape+extraction,
+    // causing auth.uid() mismatch by the time the DB write runs.
+    const svc = createServiceClient();
+
     // If clientId supplied (user navigated back), update the existing record
     let savedClientId: string;
     if (clientId) {
-      const { error: dbError } = await supabase
+      const { error: dbError } = await svc
         .from("clients")
         .update({
           url: url ?? "manual",
@@ -136,13 +141,13 @@ export async function POST(request: Request) {
           raw_scrape: combinedContent,
         })
         .eq("id", clientId)
-        .eq("user_id", user.id); // RLS double-check
+        .eq("user_id", user.id); // ownership double-check
 
       if (dbError) throw new Error(`Database error: ${dbError.message}`);
       savedClientId = clientId;
     } else {
       // New client
-      const { data: client, error: dbError } = await supabase
+      const { data: client, error: dbError } = await svc
         .from("clients")
         .insert({
           user_id: user.id,
