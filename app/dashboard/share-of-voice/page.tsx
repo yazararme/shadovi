@@ -328,6 +328,12 @@ function ShareOfVoiceInner() {
       }));
       setRuns(enriched);
 
+      // DEBUG: inspect raw rbmData at fetch time
+      const deepseekRows = (rbmData ?? []).filter((r: RbmRow) => r.model === 'deepseek');
+      console.log("total deepseek rbm rows fetched:", deepseekRows.length);
+      console.log("deepseek brand_names:", [...new Set(deepseekRows.map((r: RbmRow) => r.brand_name))].sort());
+      console.log("deepseek brand_name char codes sample:", deepseekRows.find((r: RbmRow) => r.brand_name.toLowerCase().includes('userguiding'))?.brand_name.split('').map((c: string) => c.charCodeAt(0)));
+
       const rbm = (rbmData ?? []) as RbmRow[];
       setRbmRows(rbm);
       setBrandQMSet(new Set(rbm.filter((r) => r.is_tracked_brand).map((r) => `${r.query_id}:${r.model}`)));
