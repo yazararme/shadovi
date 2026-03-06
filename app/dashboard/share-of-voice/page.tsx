@@ -417,6 +417,9 @@ function ShareOfVoiceInner() {
 
   const brandName = client.brand_dna?.brand_name ?? client.brand_name ?? "Your Brand";
 
+  // DEBUG canary — confirms we passed the early returns
+  console.log("🔥 SOV RENDER — runs:", runs.length, "client:", client?.brand_name);
+
   // Derive models from actual run data — not client.selected_models — so the heatmap
   // shows every model that has ever been tracked, regardless of current config.
   const allRunModels = Array.from(new Set(runs.map((r) => r.model as LLMModel)));
@@ -462,6 +465,13 @@ function ShareOfVoiceInner() {
       ? sovRuns.filter((r) => r.query_intent !== null && SOV_INTENTS.includes(r.query_intent as QueryIntent))
       : sovRuns.filter((r) => r.query_intent === intentFilter);
 
+  console.log("filteredRuns by model:",
+    ["deepseek","gemini","claude-sonnet-4-6","perplexity","gpt-4o"].map(m => ({
+      model: m,
+      count: filteredRuns.filter(r => r.model === m).length
+    }))
+  );
+
   // Set of query_id:model pairs in the filtered scope
   const filteredQMPairs = new Set(filteredRuns.map((r) => `${r.query_id}:${r.model}`));
 
@@ -477,6 +487,12 @@ function ShareOfVoiceInner() {
   const noBrandRowIdx = heatmapRows.length - 1;
   const lowerBrandName = brandName.toLowerCase();
 
+  // DEBUG: brand row heatmap investigation
+  console.log("filteredRbm total rows:", filteredRbm.length);
+  console.log("filteredRbm userguiding rows:", filteredRbm.filter(r => r.brand_name.toLowerCase() === "userguiding").length);
+  console.log("lowerBrandName:", lowerBrandName);
+  console.log("filteredRuns total:", filteredRuns.length);
+
   for (const model of trackedModels) {
     const modelRuns = filteredRuns.filter((r) => r.model === model);
     const total = modelRuns.length;
@@ -486,6 +502,7 @@ function ShareOfVoiceInner() {
     const brandMentionedQIds = new Set(
       filteredRbm.filter((r) => r.brand_name.toLowerCase() === lowerBrandName && r.model === model).map((r) => r.query_id)
     );
+    console.log(`model: ${model}, modelRuns: ${modelRuns.length}, brandMentionedQIds size: ${brandMentionedQIds.size}, total: ${total}`);
     const brandCount = modelRuns.filter((r) => brandMentionedQIds.has(r.query_id)).length;
     heatmapRows[0].byModel[model] = {
       mentionRate: total > 0 ? Math.round((brandCount / total) * 100) : 0,
