@@ -6,8 +6,10 @@
 // first tracking run fires, because the runner reads version_id from queries.
 
 import { NextResponse } from "next/server";
-import { createClient } from "@/lib/supabase/server";
+import { createClient, createServiceClient } from "@/lib/supabase/server";
 import { createPortfolioVersion } from "@/lib/versioning/create-version";
+
+// Auth: session check → service write
 
 export async function POST(request: Request) {
   try {
@@ -18,15 +20,17 @@ export async function POST(request: Request) {
     const { clientId } = await request.json() as { clientId: string };
     if (!clientId) return NextResponse.json({ error: "clientId required" }, { status: 400 });
 
+    const svc = createServiceClient();
+
     // 1. Create version 1 (first real version after onboarding)
     const { versionId, versionNumber } = await createPortfolioVersion(
       clientId,
       "onboarding_activation",
-      supabase
+      svc
     );
 
     // 2. Stamp version_id on all pending_approval queries and set them active
-    const { error: qError } = await supabase
+    const { error: qError } = await svc
       .from("queries")
       .update({ status: "active", version_id: versionId })
       .eq("client_id", clientId)
@@ -41,13 +45,13 @@ export async function POST(request: Request) {
       .eq("client_id", clientId)
       .eq("status", "active");
 
-    await supabase
+    await svc
       .from("portfolio_versions")
       .update({ query_count: queryCount ?? 0 })
       .eq("id", versionId);
 
     // 4. Activate the client
-    const { error: cError } = await supabase
+    const { error: cError } = await svc
       .from("clients")
       .update({ status: "active" })
       .eq("id", clientId);

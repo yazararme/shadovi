@@ -1,7 +1,9 @@
 import { NextResponse } from "next/server";
-import { createClient } from "@/lib/supabase/server";
+import { createClient, createServiceClient } from "@/lib/supabase/server";
 import { callHaiku } from "@/lib/llm/anthropic";
 import type { BrandDNA, BrandFactCategory } from "@/types";
+
+// Auth: session check → service write
 
 export const maxDuration = 60;
 
@@ -89,7 +91,8 @@ export async function POST(request: Request) {
 
     if (sanitised.length === 0) throw new Error("No valid facts generated");
 
-    const { data: inserted, error: insertErr } = await supabase
+    const svc = createServiceClient();
+    const { data: inserted, error: insertErr } = await svc
       .from("brand_facts")
       .insert(sanitised)
       .select();

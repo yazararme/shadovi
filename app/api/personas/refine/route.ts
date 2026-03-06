@@ -1,7 +1,9 @@
 import { NextResponse } from "next/server";
-import { createClient } from "@/lib/supabase/server";
+import { createClient, createServiceClient } from "@/lib/supabase/server";
 import { callHaiku } from "@/lib/llm/anthropic";
 import type { BrandDNA, RefineResponse } from "@/types";
+
+// Auth: session check → service write
 
 const BASE_RULES = `Rules:
 - Frame everything in terms of how it affects what their buyers ask AI models
@@ -106,12 +108,13 @@ User message: ${message}`;
 
     // Apply the update to Supabase if a field was changed
     if (response.updatedField && response.updatedValue !== null) {
+      const svc = createServiceClient();
       if (response.updatedField === "personas") {
         // Replace personas rows
-        await supabase.from("personas").delete().eq("client_id", clientId);
+        await svc.from("personas").delete().eq("client_id", clientId);
         const personas = response.updatedValue as Record<string, unknown>[];
         if (Array.isArray(personas)) {
-          await supabase
+          await svc
             .from("personas")
             .insert(personas.map((p) => ({ ...p, client_id: clientId })));
         }
@@ -128,7 +131,7 @@ User message: ${message}`;
             ...existing.brand_dna,
             [response.updatedField]: response.updatedValue,
           };
-          await supabase
+          await svc
             .from("clients")
             .update({ brand_dna: updatedDNA })
             .eq("id", clientId);

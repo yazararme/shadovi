@@ -1,7 +1,9 @@
 import { NextResponse } from "next/server";
-import { createClient } from "@/lib/supabase/server";
+import { createClient, createServiceClient } from "@/lib/supabase/server";
 import { callHaiku } from "@/lib/llm/anthropic";
 import type { BrandDNA, Query, QueryIntent, FunnelStage, PhrasingStyle } from "@/types";
+
+// Auth: session check → service write
 
 // Query calibration: client sends a natural language instruction, we generate
 // adds/removes and apply them to the DB. Server owns the writes so the client
@@ -137,6 +139,7 @@ User instruction: ${message}`;
     );
 
     // Insert new queries into the DB — server assigns IDs
+    const svc = createServiceClient();
     const insertedQueries: Query[] = [];
     if (Array.isArray(parsed.adds) && parsed.adds.length > 0) {
       const rows = parsed.adds.map((a) => ({
@@ -161,13 +164,13 @@ User instruction: ${message}`;
         fact_id: null,
       }));
 
-      const { data: inserted } = await supabase.from("queries").insert(rows).select("*");
+      const { data: inserted } = await svc.from("queries").insert(rows).select("*");
       if (inserted) insertedQueries.push(...(inserted as Query[]));
     }
 
     // Mark removes — filter to client's own queries for safety
     if (resolvedRemoves.length > 0) {
-      await supabase
+      await svc
         .from("queries")
         .update({ status: "removed" })
         .eq("client_id", clientId)

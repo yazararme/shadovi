@@ -1,7 +1,9 @@
 import { NextResponse } from "next/server";
-import { createClient } from "@/lib/supabase/server";
+import { createClient, createServiceClient } from "@/lib/supabase/server";
 import { callHaiku } from "@/lib/llm/anthropic";
 import { z } from "zod";
+
+// Auth: session check → service write
 
 const QueryUpdateSchema = z.array(
   z.object({
@@ -63,13 +65,14 @@ ${JSON.stringify(queries.map((q) => ({ id: q.id, text: q.text, intent: q.intent,
     const validQueryIds = new Set(queries.map((q) => q.id));
 
     // Apply updates
+    const svc = createServiceClient();
     for (const update of parsed.data) {
       if (!validQueryIds.has(update.id)) continue; // reject any ID not belonging to this client
       const patch: { relevance_score?: number; text?: string } = {};
       if (update.relevance_score !== undefined) patch.relevance_score = update.relevance_score;
       if (update.text !== undefined) patch.text = update.text;
       if (Object.keys(patch).length > 0) {
-        await supabase.from("queries").update(patch).eq("id", update.id);
+        await svc.from("queries").update(patch).eq("id", update.id);
       }
     }
 

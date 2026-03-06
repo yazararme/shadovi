@@ -4,6 +4,8 @@ import { generateQueries } from "@/lib/synthetic-buyer/query-generator";
 import { createPortfolioVersion } from "@/lib/versioning/create-version";
 import type { ClientContext, BrandFact, VersionTrigger } from "@/types";
 
+// Auth: session check → service write
+
 // Two sequential Claude calls (generate + critic) can take 60-90s on large brand contexts.
 // Without this, Vercel defaults to 10s (Hobby) or 60s (Pro) and silently kills the route.
 export const maxDuration = 120;
@@ -60,19 +62,18 @@ export async function POST(request: Request) {
     const brandFacts = (factsRes.data ?? []) as BrandFact[];
     const queries = await generateQueries(ctx, brandFacts.length > 0 ? brandFacts : undefined);
 
+    // Service client for all writes — session JWT can go stale during the 60-90s
+    // LLM work above, so every write below uses svc to bypass RLS.
+    const svc = createServiceClient();
+
     // Create a new portfolio version — deactivates the previous one and returns a fresh versionId.
     // Must happen before inserting new queries so they can be stamped with the new version.
-    const { versionId } = await createPortfolioVersion(clientId, trigger, supabase);
+    const { versionId } = await createPortfolioVersion(clientId, trigger, svc);
 
     // Soft-deactivate existing queries rather than hard-deleting them.
     // Historical tracking_runs still reference these query rows via query_id, so hard
     // deletion would orphan them. Soft-delete preserves the historical data chain.
-    // Use createServiceClient for the same reason as the client activation block below —
-    // session clients are subject to RLS and silently return 0 rows updated when the
-    // policy filters out the rows, making the deactivation appear to succeed while nothing
-    // actually changes.
-    const svcForDeactivate = createServiceClient();
-    const { error: deactivateError } = await svcForDeactivate
+    const { error: deactivateError } = await svc
       .from("queries")
       .update({
         status:                "inactive",
@@ -89,7 +90,7 @@ export async function POST(request: Request) {
     // Always insert as 'active' — queries in pending_approval are invisible to the
     // tracker and silently produce "No active queries" failures. The review/approve
     // step has been removed; generation is now the single activation point.
-    const { data: inserted, error: insertError } = await supabase
+    const { data: inserted, error: insertError } = await svc
       .from("queries")
       .insert(queries.map((q) => ({ ...q, client_id: clientId, status: "active", version_id: versionId })))
       .select();
@@ -105,7 +106,7 @@ export async function POST(request: Request) {
       const versionPatch: Record<string, unknown> = { query_count: inserted.length };
       if (versionName?.trim()) versionPatch.name = versionName.trim();
 
-      const { error: versionUpdateError } = await supabase
+      const { error: versionUpdateError } = await svc
         .from("portfolio_versions")
         .update(versionPatch)
         .eq("id", versionId);
@@ -121,7 +122,6 @@ export async function POST(request: Request) {
     // clients return error=null with 0 rows updated when the row is filtered by RLS.
     // The user was already authenticated above so service role is safe here.
     if (clientRes.data.status === "onboarding") {
-      const svc = createServiceClient();
       const { error: activateError } = await svc
         .from("clients")
         .update({ status: "active" })

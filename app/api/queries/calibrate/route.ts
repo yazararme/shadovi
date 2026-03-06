@@ -1,7 +1,9 @@
 import { NextResponse } from "next/server";
-import { createClient } from "@/lib/supabase/server";
+import { createClient, createServiceClient } from "@/lib/supabase/server";
 import { calibrateQueries } from "@/lib/synthetic-buyer/query-generator";
 import type { ClientContext, BrandFact, QueryIntent } from "@/types";
+
+// Auth: session check → service write
 
 export async function POST(request: Request) {
   try {
@@ -54,6 +56,8 @@ export async function POST(request: Request) {
       .in("intent", affectedIntents)
       .eq("manually_added", false);
 
+    const svc = createServiceClient();
+
     if (candidates && candidates.length > 0) {
       const candidateIds = candidates.map((q) => q.id);
 
@@ -69,20 +73,20 @@ export async function POST(request: Request) {
       const idsToDelete  = candidateIds.filter((id) => !idsWithRuns.has(id));
 
       if (idsToArchive.length > 0) {
-        await supabase
+        await svc
           .from("queries")
           .update({ status: "archived" })
           .in("id", idsToArchive);
       }
       if (idsToDelete.length > 0) {
-        await supabase
+        await svc
           .from("queries")
           .delete()
           .in("id", idsToDelete);
       }
     }
 
-    const { data: inserted, error: insertError } = await supabase
+    const { data: inserted, error: insertError } = await svc
       .from("queries")
       .insert(queries.map((q) => ({ ...q, client_id: clientId, status: "pending_approval" })))
       .select();

@@ -1,8 +1,10 @@
 import { NextResponse } from "next/server";
-import { createClient } from "@/lib/supabase/server";
+import { createClient, createServiceClient } from "@/lib/supabase/server";
 import { callGemini } from "@/lib/llm/gemini";
 import { callPerplexity } from "@/lib/llm/perplexity";
 import type { Competitor } from "@/types";
+
+// Auth: session check → service write
 
 // Module-level cache — lives for the server process session.
 // Key = lowercased competitor name.
@@ -96,9 +98,10 @@ export async function POST(request: Request) {
     );
 
     // Upsert competitors — delete existing and re-insert to handle re-runs
-    await supabase.from("competitors").delete().eq("client_id", clientId);
+    const svc = createServiceClient();
+    await svc.from("competitors").delete().eq("client_id", clientId);
 
-    const { data: inserted, error: insertError } = await supabase
+    const { data: inserted, error: insertError } = await svc
       .from("competitors")
       .insert(results)
       .select();

@@ -1,7 +1,9 @@
 import { NextResponse } from "next/server";
-import { createClient } from "@/lib/supabase/server";
+import { createClient, createServiceClient } from "@/lib/supabase/server";
 import { generatePersonas } from "@/lib/synthetic-buyer/persona-generator";
 import type { ClientContext } from "@/types";
+
+// Auth: session check → service write
 
 export const maxDuration = 60;
 
@@ -38,9 +40,10 @@ export async function POST(request: Request) {
     const personas = await generatePersonas(ctx);
 
     // Delete any existing personas for this client then re-insert
-    await supabase.from("personas").delete().eq("client_id", clientId);
+    const svc = createServiceClient();
+    await svc.from("personas").delete().eq("client_id", clientId);
 
-    const { data: inserted, error: insertError } = await supabase
+    const { data: inserted, error: insertError } = await svc
       .from("personas")
       .insert(personas.map((p) => ({ ...p, client_id: clientId })))
       .select();

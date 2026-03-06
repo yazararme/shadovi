@@ -1,6 +1,8 @@
 import { NextResponse } from "next/server";
-import { createClient } from "@/lib/supabase/server";
+import { createClient, createServiceClient } from "@/lib/supabase/server";
 import { inngest } from "@/inngest/client";
+
+// Auth: session check → service write
 
 // Sends a tracking/run.requested event to Inngest rather than running inline.
 // Rationale: 30 queries × 4 models = up to 120 serial LLM calls, which easily
@@ -35,7 +37,8 @@ export async function POST(request: Request) {
     // (generate/route.ts skips this for active clients, but older rows or calibrate
     // runs may still be pending). The runner only reads status='active' queries, so
     // without this step the run silently fails with "No active queries".
-    await supabase
+    const svc = createServiceClient();
+    await svc
       .from("queries")
       .update({ status: "active" })
       .eq("client_id", clientId)
