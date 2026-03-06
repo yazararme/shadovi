@@ -515,13 +515,16 @@ function ShareOfVoiceInner() {
       };
     });
 
-    // No Brand Visible row — runs where no entity at all appears in rbm for this model
+    // No Brand Visible row — runs where no entity appears in rbm AND no competitors_mentioned
+    // (competitors use tracking_runs.competitors_mentioned which may have data not in rbm)
     const anyEntityQIds = new Set(filteredRbm.filter((r) => r.model === model).map((r) => r.query_id));
-    const noBrandCount = modelRuns.filter((r) => !anyEntityQIds.has(r.query_id)).length;
+    const noEntityVisible = (r: typeof modelRuns[number]) =>
+      !anyEntityQIds.has(r.query_id) && (r.competitors_mentioned ?? []).length === 0;
+    const noBrandCount = modelRuns.filter(noEntityVisible).length;
     heatmapRows[noBrandRowIdx].byModel[model] = {
       mentionRate: total > 0 ? Math.round((noBrandCount / total) * 100) : 0,
       isPrimary: false,
-      topQueries: modelRuns.filter((r) => !anyEntityQIds.has(r.query_id)).slice(0, 2).map((r) => r.query_text),
+      topQueries: modelRuns.filter(noEntityVisible).slice(0, 2).map((r) => r.query_text),
     };
 
     // Crown: highest % per column — skip special rows
