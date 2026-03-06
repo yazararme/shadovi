@@ -321,13 +321,20 @@ function ShareOfVoiceInner() {
       const runQueryIds = [...new Set((runData ?? []).map((r: { query_id: string }) => r.query_id))];
       let rbmData: RbmRow[] | null = null;
       if (runQueryIds.length > 0) {
-        const { data } = await supabase
+        const { data, error: rbmError } = await supabase
           .from("response_brand_mentions")
           .select("query_id, model, brand_name, is_tracked_brand, query_intent")
           .eq("client_id", c.id)
           .in("query_id", runQueryIds)
           .limit(20000);
         rbmData = data as RbmRow[] | null;
+        console.log("DEBUG rbm fetch:", {
+          runQueryIdsCount: runQueryIds.length,
+          rbmRowsReturned: rbmData?.length ?? 0,
+          rbmError,
+          deepseekRows: (rbmData ?? []).filter((r: RbmRow) => r.model === "deepseek").length,
+          deepseekBrands: [...new Set((rbmData ?? []).filter((r: RbmRow) => r.model === "deepseek").map((r: RbmRow) => r.brand_name))].sort(),
+        });
       }
 
       const queryMap = Object.fromEntries((queryData ?? []).map((q) => [q.id, q]));
