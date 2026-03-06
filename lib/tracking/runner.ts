@@ -29,7 +29,7 @@ const PRIMARY_TIMEOUT_MS: Record<LLMModel, number> = {
   "gpt-4o": 60_000,//[KK] was 90, dropped as deepseek was taking too much time
   "claude-sonnet-4-6": 60_000, //[KK] was 90, dropped as deepseek was taking too much time
   "gemini": 60_000, //[KK] was 90, dropped as deepseek was taking too much time
-  "deepseek": 20_000, //[KK] was 90, dropped as deepseek was taking too much time
+  "deepseek": 60_000, //[KK] was 90→20→60; bumped back — 20s caused timeouts
   "perplexity": 60_000,
 };
 
