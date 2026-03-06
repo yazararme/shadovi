@@ -47,7 +47,7 @@ const DATE_OPTIONS: { value: "7d" | "30d" | "all"; label: string }[] = [
 ];
 
 // Non-validation intents used for share-of-voice analysis
-const SOV_INTENTS: QueryIntent[] = ["problem_aware", "category", "comparative"];
+const SOV_INTENTS: QueryIntent[] = ["problem_aware", "category"];
 
 // Coral for own brand (matches heatmap brand-row border); then a distinct palette for competitors
 const ENTITY_COLORS = [
