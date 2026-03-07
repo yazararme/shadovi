@@ -124,7 +124,7 @@ function renderInline(text: string, brandName: string, competitorNames: string[]
  *   - **bold** inline, brand highlighting, citation stripping
  *   - Plain paragraphs
  */
-function MarkdownBody({ text, brandName, competitorNames = [] }: { text: string; brandName: string; competitorNames?: string[] }) {
+export function MarkdownBody({ text, brandName, competitorNames = [] }: { text: string; brandName: string; competitorNames?: string[] }) {
   const lines = text.split("\n");
   const elements: React.ReactNode[] = [];
   let listBuffer: { content: string; indent: number }[] = [];

@@ -5,6 +5,7 @@ import { createClient } from "@/lib/supabase/client";
 import { useClientContext } from "@/context/ClientContext";
 import { Skeleton } from "@/components/ui/skeleton";
 import { ResponseDrawer, type RunOption } from "@/components/dashboard/ResponseDrawer";
+import { MetricDetailDrawer } from "@/components/dashboard/MetricDetailDrawer";
 import type { LLMModel } from "@/types";
 import {
   BarChart, Bar, XAxis, YAxis, Tooltip,
@@ -31,10 +32,15 @@ interface SentimentCounts {
 }
 
 interface MentionRow {
+  id:                string;
   brand_name:        string;
   is_tracked_brand:  boolean;
   mention_sentiment: string;
   model:             string;
+  mention_context:   string | null;
+  tracking_run_id:   string;
+  query_intent:      string | null;
+  created_at:        string;
 }
 
 interface NegativeAlertRow {
@@ -305,14 +311,17 @@ function CompetitiveFavorability({
 
 // ── Model Sentiment Breakdown ──────────────────────────────────────────────────
 
-function ModelCard({ model, counts }: { model: string; counts: SentimentCounts }) {
+function ModelCard({ model, counts, onClick }: { model: string; counts: SentimentCounts; onClick?: () => void }) {
   const total = counts.positive + counts.neutral + counts.negative;
   const insufficient = (total + counts.unclear) < 5;
   const nss  = computeNss(counts);
   const pcts = barPcts(counts);
 
   return (
-    <div className="border border-[#E2E8F0] rounded-xl bg-white p-4 flex flex-col gap-3">
+    <div
+      className={`border border-[#E2E8F0] rounded-xl bg-white p-4 flex flex-col gap-3${onClick ? " cursor-pointer hover:border-[#0D0437]/20 hover:shadow-sm transition-all" : ""}`}
+      onClick={onClick}
+    >
       <div className="flex items-start justify-between gap-2">
         <span className="text-[13px] font-bold text-[#0D0437]">{MODEL_LABELS[model] ?? model}</span>
         {!insufficient && (
@@ -335,13 +344,29 @@ function ModelCard({ model, counts }: { model: string; counts: SentimentCounts }
             <span className="text-[#6B7280]">{counts.neutral} neu</span>
             <span className="text-[#FF4B6E] font-bold">{counts.negative} neg</span>
           </div>
+          {onClick && (
+            <button
+              type="button"
+              className="flex items-center gap-0.5 text-[9px] font-bold uppercase tracking-wide text-[#9CA3AF] hover:text-[#0D0437] mt-1 transition-colors w-fit"
+            >
+              View queries →
+            </button>
+          )}
         </>
       )}
     </div>
   );
 }
 
-function ModelSentimentBreakdown({ modelMap, loading }: { modelMap: ModelSentimentMap | null; loading: boolean }) {
+function ModelSentimentBreakdown({
+  modelMap,
+  loading,
+  onCardClick,
+}: {
+  modelMap: ModelSentimentMap | null;
+  loading: boolean;
+  onCardClick?: (model: string) => void;
+}) {
   if (loading) return <Skeleton className="h-40 w-full rounded-xl" />;
   if (!modelMap || Object.keys(modelMap).length === 0) {
     return (
@@ -356,7 +381,12 @@ function ModelSentimentBreakdown({ modelMap, loading }: { modelMap: ModelSentime
   return (
     <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-3">
       {sorted.map(([model, counts]) => (
-        <ModelCard key={model} model={model} counts={counts} />
+        <ModelCard
+          key={model}
+          model={model}
+          counts={counts}
+          onClick={onCardClick ? () => onCardClick(model) : undefined}
+        />
       ))}
     </div>
   );
@@ -503,7 +533,9 @@ function ToneOfVoiceInner() {
   const [modelMap,       setModelMap      ] = useState<ModelSentimentMap | null>(null);
   const [ownBrandName,   setOwnBrandName  ] = useState<string | null>(null);
   const [negativeCount,  setNegativeCount ] = useState<number | undefined>(undefined);
+  const [ownMentions,    setOwnMentions   ] = useState<MentionRow[]>([]);
   const [loading,        setLoading       ] = useState(true);
+  const [sentimentDrawerModel, setSentimentDrawerModel] = useState<string | null>(null);
 
   useEffect(() => {
     if (!clientId) { setLoading(false); return; }
@@ -516,7 +548,7 @@ function ToneOfVoiceInner() {
       const [mentionsResult, competitorsResult] = await Promise.all([
         supabase
           .from("response_brand_mentions")
-          .select("brand_name, is_tracked_brand, mention_sentiment, model")
+          .select("id, brand_name, is_tracked_brand, mention_sentiment, model, mention_context, tracking_run_id, query_intent, created_at")
           .eq("client_id", clientId)
           .eq("query_intent", "comparative")
           .not("mention_sentiment", "is", null),
@@ -581,6 +613,9 @@ function ToneOfVoiceInner() {
       }
       setModelMap(Object.keys(mMap).length > 0 ? mMap : null);
 
+      // Preserve individual own-brand mentions for the drill-down drawer
+      setOwnMentions(rows.filter((r) => r.is_tracked_brand));
+
       setLoading(false);
     }
 
@@ -612,7 +647,11 @@ function ToneOfVoiceInner() {
 
       {/* ── Section 3: Model Sentiment Breakdown ──────────────────────────────── */}
       <SectionLabel>Model Sentiment Breakdown</SectionLabel>
-      <ModelSentimentBreakdown modelMap={modelMap} loading={loading} />
+      <ModelSentimentBreakdown
+        modelMap={modelMap}
+        loading={loading}
+        onCardClick={(model) => setSentimentDrawerModel(model)}
+      />
 
       {/* ── Section 4: Negative Alerts ────────────────────────────────────────── */}
       <SectionLabel count={negativeCount}>Negative Mentions</SectionLabel>
@@ -620,6 +659,45 @@ function ToneOfVoiceInner() {
         Instances where AI characterised your brand unfavourably in a direct comparison
       </p>
       <NegativeAlerts clientId={clientId} brandName={ownBrandName ?? "Your Brand"} />
+
+      {/* ── Sentiment drill-down drawer ──────────────────────────────────── */}
+      {sentimentDrawerModel && (() => {
+        const filteredMentions = ownMentions.filter((m) => m.model === sentimentDrawerModel);
+        const posCt = filteredMentions.filter((m) => m.mention_sentiment === "positive").length;
+        const neuCt = filteredMentions.filter((m) => m.mention_sentiment === "neutral").length;
+        const negCt = filteredMentions.filter((m) => m.mention_sentiment === "negative").length;
+        const nss = (posCt + neuCt + negCt) > 0
+          ? Math.round(((posCt - negCt) / (posCt + neuCt + negCt)) * 100)
+          : 0;
+        const sign = nss >= 0 ? "+" : "";
+        const displayName = MODEL_LABELS[sentimentDrawerModel] ?? sentimentDrawerModel;
+
+        const drawerRuns = filteredMentions.map((m) => ({
+          id: m.id,
+          queryText: m.mention_context ?? "(no context available)",
+          queryIntent: m.query_intent ?? "comparative",
+          model: m.model,
+          mentionSentiment: m.mention_sentiment,
+          ranAt: m.created_at,
+          rawResponse: undefined as string | undefined,
+          isBait: false,
+          baitTriggered: false,
+          competitorsMentioned: [] as string[],
+        }));
+
+        return (
+          <MetricDetailDrawer
+            title={`${displayName} Sentiment`}
+            metricValue={`${sign}${nss}`}
+            metricColor={nss > 0 ? "#1A8F5C" : nss < 0 ? "#FF4B6E" : "#6B7280"}
+            subtitle={`${posCt} positive · ${neuCt} neutral · ${negCt} negative`}
+            runs={drawerRuns}
+            brandName={ownBrandName ?? ""}
+            csvFilenamePrefix={`${ownBrandName ?? "brand"}_${sentimentDrawerModel}_sentiment`}
+            onClose={() => setSentimentDrawerModel(null)}
+          />
+        );
+      })()}
     </div>
   );
 }
