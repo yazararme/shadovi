@@ -75,16 +75,22 @@ function todayISO(): string {
 }
 
 function exportCSV(runs: MetricDetailRun[], filenamePrefix: string) {
-  const header = ["Query", "Intent", "Model", "Sentiment", "Is Bait", "Bait Triggered", "Date"];
-  const rows = runs.map((r) => [
-    `"${(r.queryText ?? "").replace(/"/g, '""')}"`,
-    INTENT_LABEL[r.queryIntent] ?? r.queryIntent,
-    MODEL_LABEL[r.model] ?? r.model,
-    r.mentionSentiment ? r.mentionSentiment.charAt(0).toUpperCase() + r.mentionSentiment.slice(1) : "",
-    r.isBait ? "Yes" : "No",
-    r.baitTriggered ? "Yes" : "No",
-    r.ranAt ? new Date(r.ranAt).toISOString().slice(0, 10) : "",
-  ]);
+  const header = ["Query", "Intent", "Model", "Sentiment", "Is Bait", "Bait Triggered", "Date", "Response Snippet"];
+  const rows = runs.map((r) => {
+    const snippet = r.rawResponse
+      ? r.rawResponse.replace(/\n/g, " ").replace(/"/g, '""').slice(0, 300)
+      : "";
+    return [
+      `"${(r.queryText ?? "").replace(/"/g, '""')}"`,
+      INTENT_LABEL[r.queryIntent] ?? r.queryIntent,
+      MODEL_LABEL[r.model] ?? r.model,
+      r.mentionSentiment ? r.mentionSentiment.charAt(0).toUpperCase() + r.mentionSentiment.slice(1) : "",
+      r.isBait ? "Yes" : "No",
+      r.baitTriggered ? "Yes" : "No",
+      r.ranAt ? new Date(r.ranAt).toISOString().slice(0, 10) : "",
+      `"${snippet}"`,
+    ];
+  });
 
   const csv = [header.join(","), ...rows.map((r) => r.join(","))].join("\n");
   const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });

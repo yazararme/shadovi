@@ -41,6 +41,8 @@ interface MentionRow {
   tracking_run_id:   string;
   query_intent:      string | null;
   created_at:        string;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  tracking_runs:     any;
 }
 
 interface NegativeAlertRow {
@@ -548,7 +550,7 @@ function ToneOfVoiceInner() {
       const [mentionsResult, competitorsResult] = await Promise.all([
         supabase
           .from("response_brand_mentions")
-          .select("id, brand_name, is_tracked_brand, mention_sentiment, model, mention_context, tracking_run_id, query_intent, created_at")
+          .select("id, brand_name, is_tracked_brand, mention_sentiment, model, mention_context, tracking_run_id, query_intent, created_at, tracking_runs(raw_response, query_id, competitors_mentioned)")
           .eq("client_id", clientId)
           .eq("query_intent", "comparative")
           .not("mention_sentiment", "is", null),
@@ -679,10 +681,10 @@ function ToneOfVoiceInner() {
           model: m.model,
           mentionSentiment: m.mention_sentiment,
           ranAt: m.created_at,
-          rawResponse: undefined as string | undefined,
+          rawResponse: (m.tracking_runs as { raw_response?: string | null } | null)?.raw_response ?? undefined,
           isBait: false,
           baitTriggered: false,
-          competitorsMentioned: [] as string[],
+          competitorsMentioned: ((m.tracking_runs as { competitors_mentioned?: string[] | null } | null)?.competitors_mentioned ?? []),
         }));
 
         return (
