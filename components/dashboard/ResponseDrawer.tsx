@@ -107,7 +107,7 @@ function renderInline(text: string, brandName: string, competitorNames: string[]
         i % 2 === 1 ? (
           // Bold segment
           <strong key={i} className="font-semibold text-[#0D0437]">
-            {seg.replace(/(\[\d+\])+/g, "")}
+            {highlightNames(seg.replace(/(\[\d+\])+/g, ""), i)}
           </strong>
         ) : (
           highlightNames(seg, i)
