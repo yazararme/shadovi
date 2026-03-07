@@ -49,7 +49,7 @@ const MODEL_BADGE: Record<LLMModel, string> = {
  *   - **bold** → <strong>
  *   - Brand name occurrences → amber <mark>
  */
-function renderInline(text: string, brandName: string): React.ReactNode {
+function renderInline(text: string, brandName: string, competitorNames: string[] = []): React.ReactNode {
   // Strip footnote-style citations [1], [1][2], etc.
   const clean = text.replace(/(\[\d+\])+/g, "");
 
@@ -59,20 +59,44 @@ function renderInline(text: string, brandName: string): React.ReactNode {
   const escaped = brandName ? brandName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") : null;
   const lowerBrand = brandName?.toLowerCase();
 
-  function highlightBrand(str: string, outerKey: number): React.ReactNode {
-    if (!escaped || !str) return <React.Fragment key={outerKey}>{str}</React.Fragment>;
-    const parts = str.split(new RegExp(`(${escaped})`, "gi"));
+  // Build competitor lookup for case-insensitive matching
+  const competitorPatterns = competitorNames
+    .filter(Boolean)
+    .map((c) => ({
+      escaped: c.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"),
+      lower: c.toLowerCase(),
+    }));
+
+  // Combined regex: brand + all competitors in one pass to avoid nested splits
+  const allPatterns = [
+    ...(escaped ? [escaped] : []),
+    ...competitorPatterns.map((c) => c.escaped),
+  ];
+
+  function highlightNames(str: string, outerKey: number): React.ReactNode {
+    if (allPatterns.length === 0 || !str) return <React.Fragment key={outerKey}>{str}</React.Fragment>;
+    const regex = new RegExp(`(${allPatterns.join("|")})`, "gi");
+    const parts = str.split(regex);
     return (
       <React.Fragment key={outerKey}>
-        {parts.map((p, j) =>
-          p.toLowerCase() === lowerBrand ? (
-            <mark key={j} className="bg-amber-100 text-amber-900 rounded px-0.5 not-italic font-medium">
-              {p}
-            </mark>
-          ) : (
-            <React.Fragment key={j}>{p}</React.Fragment>
-          )
-        )}
+        {parts.map((p, j) => {
+          const lower = p.toLowerCase();
+          if (escaped && lower === lowerBrand) {
+            return (
+              <mark key={j} className="bg-amber-100 text-amber-900 rounded px-0.5 not-italic font-medium">
+                {p}
+              </mark>
+            );
+          }
+          if (competitorPatterns.some((c) => lower === c.lower)) {
+            return (
+              <mark key={j} className="bg-[rgba(255,75,110,0.08)] text-[#FF4B6E] rounded px-0.5 not-italic font-medium">
+                {p}
+              </mark>
+            );
+          }
+          return <React.Fragment key={j}>{p}</React.Fragment>;
+        })}
       </React.Fragment>
     );
   }
@@ -86,7 +110,7 @@ function renderInline(text: string, brandName: string): React.ReactNode {
             {seg.replace(/(\[\d+\])+/g, "")}
           </strong>
         ) : (
-          highlightBrand(seg, i)
+          highlightNames(seg, i)
         )
       )}
     </>
@@ -100,7 +124,7 @@ function renderInline(text: string, brandName: string): React.ReactNode {
  *   - **bold** inline, brand highlighting, citation stripping
  *   - Plain paragraphs
  */
-function MarkdownBody({ text, brandName }: { text: string; brandName: string }) {
+function MarkdownBody({ text, brandName, competitorNames = [] }: { text: string; brandName: string; competitorNames?: string[] }) {
   const lines = text.split("\n");
   const elements: React.ReactNode[] = [];
   let listBuffer: { content: string; indent: number }[] = [];
@@ -117,7 +141,7 @@ function MarkdownBody({ text, brandName }: { text: string; brandName: string }) 
             style={item.indent > 0 ? { paddingLeft: `${item.indent * 14}px` } : undefined}
           >
             <span className="text-[#9CA3AF] shrink-0 select-none mt-[3px] text-[10px]">•</span>
-            <span>{renderInline(item.content, brandName)}</span>
+            <span>{renderInline(item.content, brandName, competitorNames)}</span>
           </li>
         ))}
       </ul>
@@ -147,7 +171,7 @@ function MarkdownBody({ text, brandName }: { text: string; brandName: string }) 
           : "text-[12px] font-semibold text-[#0D0437]";
       elements.push(
         <p key={`h-${key++}`} className={cls}>
-          {renderInline(headingMatch[2], brandName)}
+          {renderInline(headingMatch[2], brandName, competitorNames)}
         </p>
       );
       continue;
@@ -167,7 +191,7 @@ function MarkdownBody({ text, brandName }: { text: string; brandName: string }) 
     flushList();
     elements.push(
       <p key={`p-${key++}`} className="text-[13px] text-[#374151] leading-[1.85]">
-        {renderInline(trimmed, brandName)}
+        {renderInline(trimmed, brandName, competitorNames)}
       </p>
     );
   }
@@ -317,7 +341,7 @@ export function ResponseDrawer({
           ) : activeRun?.rawResponse?.trim() === "" ? (
             <p className="text-[13px] text-[#6B7280] italic">No response recorded for this run.</p>
           ) : (
-            <MarkdownBody text={activeRun?.rawResponse ?? ""} brandName={brandName} />
+            <MarkdownBody text={activeRun?.rawResponse ?? ""} brandName={brandName} competitorNames={activeRun?.competitorsMentioned ?? []} />
           )}
         </div>
 
