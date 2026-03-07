@@ -123,7 +123,15 @@ function PlaceholderCard() {
 
 // ── Reputation Snapshot ────────────────────────────────────────────────────────
 
-function ReputationSnapshot({ counts, loading }: { counts: SentimentCounts | null; loading: boolean }) {
+function ReputationSnapshot({
+  counts,
+  loading,
+  onSegmentClick,
+}: {
+  counts: SentimentCounts | null;
+  loading: boolean;
+  onSegmentClick?: (segment: "positive" | "neutral" | "negative" | "all") => void;
+}) {
   if (loading) return <Skeleton className="h-36 w-full rounded-xl" />;
 
   const total = counts ? counts.positive + counts.neutral + counts.negative + counts.unclear : 0;
@@ -147,25 +155,57 @@ function ReputationSnapshot({ counts, loading }: { counts: SentimentCounts | nul
     <div className="border border-[#E2E8F0] rounded-xl bg-white p-6">
       <div className="flex flex-col sm:flex-row sm:items-center gap-6">
         <div className="flex items-center gap-3">
-          <div className="flex flex-col items-center gap-1">
+          <div
+            className={`flex flex-col items-center gap-1 px-3 py-2 -mx-3 -my-2${onSegmentClick ? " cursor-pointer hover:bg-[#F4F6F9] rounded-lg transition-colors" : ""}`}
+            onClick={() => onSegmentClick?.("positive")}
+          >
             <span className="text-[22px] font-bold text-[#1A8F5C] leading-none">{positive}</span>
             <span className="text-[10px] font-bold uppercase tracking-[1.5px] px-2.5 py-0.5 rounded-full bg-[rgba(26,143,92,0.08)] text-[#1A8F5C] border border-[rgba(26,143,92,0.2)]">Positive</span>
+            {onSegmentClick && (
+              <button type="button" className="flex items-center gap-0.5 text-[9px] font-bold uppercase tracking-wide text-[#9CA3AF] hover:text-[#0D0437] mt-1.5 transition-colors w-fit">
+                View mentions →
+              </button>
+            )}
           </div>
           <div className="h-8 w-px bg-[#E2E8F0] shrink-0" />
-          <div className="flex flex-col items-center gap-1">
+          <div
+            className={`flex flex-col items-center gap-1 px-3 py-2 -mx-3 -my-2${onSegmentClick ? " cursor-pointer hover:bg-[#F4F6F9] rounded-lg transition-colors" : ""}`}
+            onClick={() => onSegmentClick?.("neutral")}
+          >
             <span className="text-[22px] font-bold text-[#6B7280] leading-none">{neutral}</span>
             <span className="text-[10px] font-bold uppercase tracking-[1.5px] px-2.5 py-0.5 rounded-full bg-[#F4F6F9] text-[#6B7280] border border-[#E2E8F0]">Neutral</span>
+            {onSegmentClick && (
+              <button type="button" className="flex items-center gap-0.5 text-[9px] font-bold uppercase tracking-wide text-[#9CA3AF] hover:text-[#0D0437] mt-1.5 transition-colors w-fit">
+                View mentions →
+              </button>
+            )}
           </div>
           <div className="h-8 w-px bg-[#E2E8F0] shrink-0" />
-          <div className="flex flex-col items-center gap-1">
+          <div
+            className={`flex flex-col items-center gap-1 px-3 py-2 -mx-3 -my-2${onSegmentClick ? " cursor-pointer hover:bg-[#F4F6F9] rounded-lg transition-colors" : ""}`}
+            onClick={() => onSegmentClick?.("negative")}
+          >
             <span className="text-[22px] font-bold text-[#FF4B6E] leading-none">{negative}</span>
             <span className="text-[10px] font-bold uppercase tracking-[1.5px] px-2.5 py-0.5 rounded-full bg-[rgba(255,75,110,0.08)] text-[#FF4B6E] border border-[rgba(255,75,110,0.2)]">Negative</span>
+            {onSegmentClick && (
+              <button type="button" className="flex items-center gap-0.5 text-[9px] font-bold uppercase tracking-wide text-[#9CA3AF] hover:text-[#0D0437] mt-1.5 transition-colors w-fit">
+                View mentions →
+              </button>
+            )}
           </div>
         </div>
         <div className="hidden sm:block h-16 w-px bg-[#E2E8F0] shrink-0" />
-        <div className="flex flex-col items-start justify-center gap-1">
+        <div
+          className={`flex flex-col items-start justify-center gap-1 px-3 py-2 -mx-3 -my-2${onSegmentClick ? " cursor-pointer hover:bg-[#F4F6F9] rounded-lg transition-colors" : ""}`}
+          onClick={() => onSegmentClick?.("all")}
+        >
           <span className={`text-[42px] font-bold leading-none ${color}`}>{label}</span>
           <span className="text-[12px] font-bold text-[#0D0437]">Net Sentiment Score</span>
+          {onSegmentClick && (
+            <button type="button" className="flex items-center gap-0.5 text-[9px] font-bold uppercase tracking-wide text-[#9CA3AF] hover:text-[#0D0437] mt-1.5 transition-colors w-fit">
+              View mentions →
+            </button>
+          )}
         </div>
       </div>
       <p className="text-[11px] text-[#9CA3AF] mt-5 pt-4 border-t border-[#F4F6F9]">
@@ -538,6 +578,8 @@ function ToneOfVoiceInner() {
   const [ownMentions,    setOwnMentions   ] = useState<MentionRow[]>([]);
   const [loading,        setLoading       ] = useState(true);
   const [sentimentDrawerModel, setSentimentDrawerModel] = useState<string | null>(null);
+  // null | "positive" | "neutral" | "negative" | "all"
+  const [snapshotDrawer, setSnapshotDrawer] = useState<string | null>(null);
 
   useEffect(() => {
     if (!clientId) { setLoading(false); return; }
@@ -641,7 +683,14 @@ function ToneOfVoiceInner() {
 
       {/* ── Section 1: Reputation Snapshot ────────────────────────────────────── */}
       <SectionLabel>Reputation Snapshot</SectionLabel>
-      <ReputationSnapshot counts={snapshotCounts} loading={loading} />
+      <ReputationSnapshot
+        counts={snapshotCounts}
+        loading={loading}
+        onSegmentClick={(segment) => {
+          setSentimentDrawerModel(null);
+          setSnapshotDrawer(segment);
+        }}
+      />
 
       {/* ── Section 2: Competitive Favorability ───────────────────────────────── */}
       <SectionLabel>Competitive Favorability</SectionLabel>
@@ -652,7 +701,10 @@ function ToneOfVoiceInner() {
       <ModelSentimentBreakdown
         modelMap={modelMap}
         loading={loading}
-        onCardClick={(model) => setSentimentDrawerModel(model)}
+        onCardClick={(model) => {
+          setSnapshotDrawer(null);
+          setSentimentDrawerModel(model);
+        }}
       />
 
       {/* ── Section 4: Negative Alerts ────────────────────────────────────────── */}
@@ -661,6 +713,56 @@ function ToneOfVoiceInner() {
         Instances where AI characterised your brand unfavourably in a direct comparison
       </p>
       <NegativeAlerts clientId={clientId} brandName={ownBrandName ?? "Your Brand"} />
+
+      {/* ── Snapshot drill-down drawer ────────────────────────────────────── */}
+      {snapshotDrawer && (() => {
+        const filtered = snapshotDrawer === "all"
+          ? ownMentions
+          : ownMentions.filter((m) => m.mention_sentiment === snapshotDrawer);
+
+        const label = snapshotDrawer === "all" ? "All Mentions" : `${snapshotDrawer.charAt(0).toUpperCase() + snapshotDrawer.slice(1)} Mentions`;
+
+        const value = snapshotDrawer === "all"
+          ? (() => {
+              const p = ownMentions.filter(m => m.mention_sentiment === "positive").length;
+              const n = ownMentions.filter(m => m.mention_sentiment === "negative").length;
+              const d = p + ownMentions.filter(m => m.mention_sentiment === "neutral").length + n;
+              const nssVal = d > 0 ? Math.round(((p - n) / d) * 100) : 0;
+              return `${nssVal >= 0 ? "+" : ""}${nssVal}`;
+            })()
+          : `${filtered.length}`;
+
+        const metricColor = snapshotDrawer === "positive" ? "#1A8F5C"
+          : snapshotDrawer === "negative" ? "#FF4B6E"
+          : snapshotDrawer === "neutral" ? "#6B7280"
+          : "#0D0437";
+
+        const drawerRuns = filtered.map((m) => ({
+          id: m.id,
+          queryText: m.mention_context ?? "(no context available)",
+          queryIntent: m.query_intent ?? "comparative",
+          model: m.model,
+          mentionSentiment: m.mention_sentiment,
+          ranAt: m.created_at,
+          rawResponse: (m.tracking_runs as { raw_response?: string | null } | null)?.raw_response ?? undefined,
+          isBait: false,
+          baitTriggered: false,
+          competitorsMentioned: ((m.tracking_runs as { competitors_mentioned?: string[] | null } | null)?.competitors_mentioned ?? []),
+        }));
+
+        return (
+          <MetricDetailDrawer
+            title={label}
+            metricValue={value}
+            metricColor={metricColor}
+            subtitle={`${filtered.length} mention${filtered.length !== 1 ? "s" : ""} across all models`}
+            runs={drawerRuns}
+            brandName={ownBrandName ?? ""}
+            csvFilenamePrefix={`${ownBrandName ?? "brand"}_${snapshotDrawer}_mentions`}
+            onClose={() => setSnapshotDrawer(null)}
+          />
+        );
+      })()}
 
       {/* ── Sentiment drill-down drawer ──────────────────────────────────── */}
       {sentimentDrawerModel && (() => {
