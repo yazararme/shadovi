@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState, Suspense } from "react";
+import { useEffect, useRef, useState, Suspense } from "react";
 import { useClientContext } from "@/context/ClientContext";
 import { createClient } from "@/lib/supabase/client";
 import { ModelIntentHeatmap, type HeatmapRow } from "@/components/dashboard/ModelIntentHeatmap";
@@ -572,7 +572,9 @@ function ShareOfVoiceInner() {
   });
 
   // ── Derived: Heatmap drawer data ─────────────────────────────────────────
-  const heatmapDrawerData = useMemo(() => {
+  // Plain derivation (not useMemo) — only computes when drawer is open, and
+  // avoids hook-ordering issues with early returns above.
+  const heatmapDrawerData = (() => {
     if (!heatmapDrawer) return null;
     const { entityName, model, isBrand, isSpecialRow } = heatmapDrawer;
 
@@ -649,7 +651,7 @@ function ShareOfVoiceInner() {
       runs: drawerRuns,
       csvPrefix: `${brandName}_${entityName.replace(/\s+/g, "_")}_${model}_sov`,
     };
-  }, [heatmapDrawer, filteredRuns, filteredRbm, lowerBrandName, brandName]);
+  })();
 
   // ── Derived: Visibility Trend ─────────────────────────────────────────────
   // problem_aware + category only; date + model filter already applied via baseRuns
