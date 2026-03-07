@@ -24,19 +24,18 @@ CREATE INDEX IF NOT EXISTS idx_recommendations_client_status
 -- Backfill: group pre-existing rows into synthetic batches by client + truncated minute.
 -- Rows created within the same minute for the same client are assumed to belong to
 -- the same generation call and receive a shared batch_id.
-WITH synthetic_batches AS (
-  SELECT
-    id,
-    gen_random_uuid() OVER (
-      PARTITION BY client_id, date_trunc('minute', created_at)
-      ORDER BY created_at
-      ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING
-    ) AS assigned_batch_id
+WITH groups AS (
+  SELECT DISTINCT client_id, date_trunc('minute', created_at) AS grp
   FROM public.recommendations
   WHERE batch_id IS NULL
+),
+group_ids AS (
+  SELECT client_id, grp, gen_random_uuid() AS assigned_batch_id
+  FROM groups
 )
 UPDATE public.recommendations r
-SET batch_id = sb.assigned_batch_id
-FROM synthetic_batches sb
-WHERE r.id = sb.id
+SET batch_id = g.assigned_batch_id
+FROM group_ids g
+WHERE r.client_id = g.client_id
+  AND date_trunc('minute', r.created_at) = g.grp
   AND r.batch_id IS NULL;

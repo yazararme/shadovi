@@ -212,18 +212,23 @@ function DiscoverPageInner() {
         body: JSON.stringify({ clientId: bgClientId }),
       }).catch(() => {}); // swallow — page generates on demand as fallback
 
+      // Facts must finish before queries — the query generator reads brand_facts
+      // from the DB to produce bait queries (is_true=false facts). Without this
+      // sequencing, /api/queries/generate sees an empty brand_facts table and
+      // generates a portfolio with zero bait queries.
       fetch("/api/facts/generate", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ clientId: bgClientId }),
-      }).catch(() => {});
-
-      // Query generation fires in parallel with personas and facts
-      fetch("/api/queries/generate", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ clientId: bgClientId }),
-      }).catch(() => {});
+      })
+        .then(() =>
+          fetch("/api/queries/generate", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ clientId: bgClientId }),
+          })
+        )
+        .catch(() => {});
 
       const likelyCompetitors = (data.brandDNA?.likely_competitors ?? []) as string[];
       if (likelyCompetitors.length > 0) {

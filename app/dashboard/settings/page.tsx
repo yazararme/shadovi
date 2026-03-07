@@ -1199,7 +1199,7 @@ function SettingsInner() {
                 ? <p className="text-xs text-muted-foreground italic">No competitors added.</p>
                 : <div className="space-y-1">
                     {competitors.slice(0, 3).map((c) => <p key={c.id} className="text-xs text-[#0D0437]">{c.name}</p>)}
-                    {competitors.length > 3 && <p className="text-xs text-muted-foreground">+{competitors.length - 3} more</p>}
+                    {competitors.length > 3 && <button type="button" onClick={(e) => { e.stopPropagation(); setActiveModal("competitors"); }} className="text-xs text-muted-foreground hover:text-[#0D0437] cursor-pointer transition-colors">+{competitors.length - 3} more</button>}
                   </div>}
             </ConfigCard>
 
@@ -1220,7 +1220,7 @@ function SettingsInner() {
                         <p className="text-xs text-muted-foreground">{p.role}</p>
                       </div>
                     ))}
-                    {personas.length > 3 && <p className="text-xs text-muted-foreground">+{personas.length - 3} more</p>}
+                    {personas.length > 3 && <button type="button" onClick={(e) => { e.stopPropagation(); setActiveModal("personas"); }} className="text-xs text-muted-foreground hover:text-[#0D0437] cursor-pointer transition-colors">+{personas.length - 3} more</button>}
                   </div>}
             </ConfigCard>
 
@@ -1240,7 +1240,7 @@ function SettingsInner() {
                         {f.claim.length > 60 ? `${f.claim.slice(0, 60)}…` : f.claim}
                       </p>
                     ))}
-                    {facts.length > 3 && <p className="text-xs text-muted-foreground">+{facts.length - 3} more</p>}
+                    {facts.length > 3 && <button type="button" onClick={(e) => { e.stopPropagation(); setActiveModal("facts"); }} className="text-xs text-muted-foreground hover:text-[#0D0437] cursor-pointer transition-colors">+{facts.length - 3} more</button>}
                   </div>}
             </ConfigCard>
           </div>
