@@ -202,6 +202,9 @@ function KnowledgeInner() {
   // BVI drawer state
   const [bviDrawer, setBviDrawer] = useState<"bvi_score" | "trigger_rate" | "cross_model" | null>(null);
 
+  // Knowledge accuracy drawer state
+  const [knowledgeDrawer, setKnowledgeDrawer] = useState<"accuracy" | "hallucinations" | "facts_tested" | null>(null);
+
   // Drill-down slide-over state
   const [drillDown, setDrillDown] = useState<{
     open: boolean;
@@ -416,6 +419,84 @@ function KnowledgeInner() {
     return a.model.localeCompare(b.model);
   });
 
+  // ── Knowledge accuracy drawer data ──────────────────────────────────────
+  const accuracyColor = (rate: number) =>
+    rate >= 70 ? "#1A8F5C" : rate >= 40 ? "#F59E0B" : "#FF4B6E";
+
+  const uniqueFactCount = new Set(scores.map((s) => s.fact_id)).size;
+  const hallucinationCount = alertGroups.length;
+
+  const accuracyDrawerRuns: MetricDetailRun[] = scores.map((s) => ({
+    id: s.tracking_run_id ?? s.id ?? crypto.randomUUID(),
+    queryText: s.query_text ?? s.fact_claim ?? "",
+    queryIntent: "validation",
+    model: s.model,
+    mentionSentiment:
+      s.accuracy === "correct" ? "positive" : s.accuracy === "incorrect" ? "negative" : "neutral",
+    ranAt: s.scored_at,
+    rawResponse: s.raw_response ?? undefined,
+    competitorsMentioned: [],
+  }));
+
+  const hallucinationDrawerRuns: MetricDetailRun[] = scores
+    .filter((s) => s.hallucination || s.bait_triggered)
+    .map((s) => ({
+      id: s.tracking_run_id ?? s.id ?? crypto.randomUUID(),
+      queryText: s.query_text ?? s.fact_claim ?? "",
+      queryIntent: "validation",
+      model: s.model,
+      mentionSentiment: "negative",
+      ranAt: s.scored_at,
+      rawResponse: s.raw_response ?? undefined,
+      isBait: !s.fact_is_true,
+      baitTriggered: s.bait_triggered ?? false,
+      competitorsMentioned: [],
+    }));
+
+  const factsTestedDrawerRuns: MetricDetailRun[] = [...scores]
+    .sort((a, b) => a.fact_claim.localeCompare(b.fact_claim) || a.model.localeCompare(b.model))
+    .map((s) => ({
+      id: s.tracking_run_id ?? s.id ?? crypto.randomUUID(),
+      queryText: s.fact_claim ?? s.query_text ?? "",
+      queryIntent: "validation",
+      model: s.model,
+      mentionSentiment:
+        s.accuracy === "correct" ? "positive" : s.accuracy === "incorrect" ? "negative" : "neutral",
+      ranAt: s.scored_at,
+      rawResponse: s.raw_response ?? undefined,
+      competitorsMentioned: [],
+    }));
+
+  const knowledgeDrawerConfigs = {
+    accuracy: {
+      title: "Overall Accuracy Breakdown",
+      metricValue: `${accuracyRate}%`,
+      metricColor: accuracyColor(accuracyRate),
+      subtitle: `${correctCount} of ${totalScored} validation runs scored correctly`,
+      runs: accuracyDrawerRuns,
+      csvPrefix: `${brandName}_overall_accuracy`,
+    },
+    hallucinations: {
+      title: "Hallucination Alerts Detail",
+      metricValue: `${hallucinationCount}`,
+      metricColor: hallucinationCount > 0 ? "#FF4B6E" : "#1A8F5C",
+      subtitle:
+        hallucinationCount === 0
+          ? "No hallucinations detected"
+          : `${hallucinationCount} fact–model combination${hallucinationCount !== 1 ? "s" : ""} with hallucinations`,
+      runs: hallucinationDrawerRuns,
+      csvPrefix: `${brandName}_hallucination_alerts`,
+    },
+    facts_tested: {
+      title: "Facts Tested Breakdown",
+      metricValue: `${uniqueFactCount}`,
+      metricColor: "#0D0437",
+      subtitle: `unique claims evaluated across ${trackedModels.length} model${trackedModels.length !== 1 ? "s" : ""}`,
+      runs: factsTestedDrawerRuns,
+      csvPrefix: `${brandName}_facts_tested`,
+    },
+  };
+
   const bviDrawerConfigs = {
     bvi_score: {
       title: "BVI Score Breakdown",
@@ -459,54 +540,86 @@ function KnowledgeInner() {
       {/* Top-line accuracy score */}
       <SubLabel>Knowledge Accuracy Score</SubLabel>
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-6">
-        <div className="border border-[#E2E8F0] rounded-lg p-5 bg-white">
-          <p className="text-[9px] font-bold tracking-[2px] uppercase text-[#6B7280] mb-2">
+        {/* Overall Accuracy */}
+        <div
+          className="border border-[#E2E8F0] rounded-lg p-5 bg-white flex flex-col cursor-pointer hover:border-[#0D0437]/20 hover:shadow-sm transition-all"
+          onClick={() => { setKnowledgeDrawer("accuracy"); setBviDrawer(null); }}
+        >
+          <p className="text-[9px] font-bold tracking-[2px] uppercase text-[#6B7280] mb-2 min-h-[28px] flex items-end">
             Overall Accuracy
           </p>
-          <p className="text-[36px] font-bold text-[#0D0437] leading-none">{accuracyRate}%</p>
+          <p className="text-[36px] font-bold text-[#0D0437] leading-none min-h-[42px]">{accuracyRate}%</p>
           <div className="mt-3 h-[5px] w-full bg-[#E2E8F0] rounded-full overflow-hidden">
             <div
               className="h-full rounded-full transition-all"
               style={{
                 width: `${accuracyRate}%`,
-                backgroundColor:
-                  accuracyRate >= 70 ? "#1A8F5C" : accuracyRate >= 40 ? "#F59E0B" : "#FF4B6E",
+                backgroundColor: accuracyColor(accuracyRate),
               }}
             />
           </div>
           <p className="text-[11px] text-[#6B7280] mt-2">
             {correctCount} of {totalScored} validation runs scored correctly
           </p>
+          <button
+            type="button"
+            onClick={(e) => { e.stopPropagation(); setKnowledgeDrawer("accuracy"); setBviDrawer(null); }}
+            className="flex items-center gap-0.5 text-[9px] font-bold uppercase tracking-wide text-[#9CA3AF] hover:text-[#0D0437] mt-2 transition-colors w-fit"
+          >
+            View queries →
+          </button>
         </div>
 
-        <div className="border border-[#E2E8F0] rounded-lg p-5 bg-white">
-          <p className="text-[9px] font-bold tracking-[2px] uppercase text-[#6B7280] mb-2">
+        {/* Hallucination Alerts */}
+        <div
+          className="border border-[#E2E8F0] rounded-lg p-5 bg-white flex flex-col cursor-pointer hover:border-[#0D0437]/20 hover:shadow-sm transition-all"
+          onClick={() => { setKnowledgeDrawer("hallucinations"); setBviDrawer(null); }}
+        >
+          <p className="text-[9px] font-bold tracking-[2px] uppercase text-[#6B7280] mb-2 min-h-[28px] flex items-end">
             Hallucination Alerts
           </p>
           <p
-            className="text-[36px] font-bold leading-none"
-            style={{ color: alertGroups.length > 0 ? "#FF4B6E" : "#1A8F5C" }}
+            className="text-[36px] font-bold leading-none min-h-[42px]"
+            style={{ color: hallucinationCount > 0 ? "#FF4B6E" : "#1A8F5C" }}
           >
-            {alertGroups.length}
+            {hallucinationCount}
           </p>
           <p className="text-[11px] text-[#6B7280] mt-2">
-            {alertGroups.length === 0
+            {hallucinationCount === 0
               ? "No hallucinations detected"
-              : `${alertGroups.length} fact–model combination${alertGroups.length !== 1 ? "s" : ""} with hallucinations`}
+              : `${hallucinationCount} fact–model combination${hallucinationCount !== 1 ? "s" : ""} with hallucinations`}
           </p>
+          <button
+            type="button"
+            onClick={(e) => { e.stopPropagation(); setKnowledgeDrawer("hallucinations"); setBviDrawer(null); }}
+            className="flex items-center gap-0.5 text-[9px] font-bold uppercase tracking-wide text-[#9CA3AF] hover:text-[#0D0437] mt-2 transition-colors w-fit"
+          >
+            View queries →
+          </button>
         </div>
 
-        <div className="border border-[#E2E8F0] rounded-lg p-5 bg-white">
-          <p className="text-[9px] font-bold tracking-[2px] uppercase text-[#6B7280] mb-2">
+        {/* Facts Tested */}
+        <div
+          className="border border-[#E2E8F0] rounded-lg p-5 bg-white flex flex-col cursor-pointer hover:border-[#0D0437]/20 hover:shadow-sm transition-all"
+          onClick={() => { setKnowledgeDrawer("facts_tested"); setBviDrawer(null); }}
+        >
+          <p className="text-[9px] font-bold tracking-[2px] uppercase text-[#6B7280] mb-2 min-h-[28px] flex items-end">
             Facts Tested
           </p>
-          <p className="text-[36px] font-bold text-[#0D0437] leading-none">
-            {new Set(scores.map((s) => s.fact_id)).size}
+          <p className="text-[36px] font-bold text-[#0D0437] leading-none min-h-[42px]">
+            {uniqueFactCount}
           </p>
           <p className="text-[11px] text-[#6B7280] mt-2">
             unique claims evaluated across {trackedModels.length} model
             {trackedModels.length !== 1 ? "s" : ""}
           </p>
+          <button
+            type="button"
+            onClick={(e) => { e.stopPropagation(); setKnowledgeDrawer("facts_tested"); setBviDrawer(null); }}
+            className="flex items-center gap-0.5 text-[9px] font-bold uppercase tracking-wide text-[#9CA3AF] hover:text-[#0D0437] mt-2 transition-colors w-fit"
+          >
+            View queries →
+          </button>
         </div>
       </div>
 
@@ -517,7 +630,7 @@ function KnowledgeInner() {
         {/* Composite BVI Score */}
         <div
           className={`border border-[#E2E8F0] rounded-lg p-5 bg-white transition-all${hasBaitData ? " cursor-pointer hover:border-[#0D0437]/20 hover:shadow-sm" : ""}`}
-          onClick={hasBaitData ? () => setBviDrawer("bvi_score") : undefined}
+          onClick={hasBaitData ? () => { setBviDrawer("bvi_score"); setKnowledgeDrawer(null); } : undefined}
         >
           <p className="text-[9px] font-bold tracking-[2px] uppercase text-[#6B7280] mb-2">BVI Score</p>
           {bviResult.composite !== null ? (
@@ -541,7 +654,7 @@ function KnowledgeInner() {
           {hasBaitData ? (
             <button
               type="button"
-              onClick={(e) => { e.stopPropagation(); setBviDrawer("bvi_score"); }}
+              onClick={(e) => { e.stopPropagation(); setBviDrawer("bvi_score"); setKnowledgeDrawer(null); }}
               className="flex items-center gap-0.5 text-[9px] font-bold uppercase tracking-wide text-[#9CA3AF] hover:text-[#0D0437] mt-2 transition-colors w-fit"
             >
               View queries →
@@ -556,7 +669,7 @@ function KnowledgeInner() {
         {/* Frequency */}
         <div
           className={`border border-[#E2E8F0] rounded-lg p-5 bg-white transition-all${hasBaitData ? " cursor-pointer hover:border-[#0D0437]/20 hover:shadow-sm" : ""}`}
-          onClick={hasBaitData ? () => setBviDrawer("trigger_rate") : undefined}
+          onClick={hasBaitData ? () => { setBviDrawer("trigger_rate"); setKnowledgeDrawer(null); } : undefined}
         >
           <p className="text-[9px] font-bold tracking-[2px] uppercase text-[#6B7280] mb-2">Bait Trigger Rate</p>
           {bviResult.frequency !== null ? (
@@ -582,7 +695,7 @@ function KnowledgeInner() {
           {hasBaitData ? (
             <button
               type="button"
-              onClick={(e) => { e.stopPropagation(); setBviDrawer("trigger_rate"); }}
+              onClick={(e) => { e.stopPropagation(); setBviDrawer("trigger_rate"); setKnowledgeDrawer(null); }}
               className="flex items-center gap-0.5 text-[9px] font-bold uppercase tracking-wide text-[#9CA3AF] hover:text-[#0D0437] mt-2 transition-colors w-fit"
             >
               View queries →
@@ -597,7 +710,7 @@ function KnowledgeInner() {
         {/* Replication */}
         <div
           className={`border border-[#E2E8F0] rounded-lg p-5 bg-white transition-all${hasBaitData ? " cursor-pointer hover:border-[#0D0437]/20 hover:shadow-sm" : ""}`}
-          onClick={hasBaitData ? () => setBviDrawer("cross_model") : undefined}
+          onClick={hasBaitData ? () => { setBviDrawer("cross_model"); setKnowledgeDrawer(null); } : undefined}
         >
           <p className="text-[9px] font-bold tracking-[2px] uppercase text-[#6B7280] mb-2">Cross-Model Spread</p>
           {bviResult.replication !== null ? (
@@ -621,7 +734,7 @@ function KnowledgeInner() {
           {hasBaitData ? (
             <button
               type="button"
-              onClick={(e) => { e.stopPropagation(); setBviDrawer("cross_model"); }}
+              onClick={(e) => { e.stopPropagation(); setBviDrawer("cross_model"); setKnowledgeDrawer(null); }}
               className="flex items-center gap-0.5 text-[9px] font-bold uppercase tracking-wide text-[#9CA3AF] hover:text-[#0D0437] mt-2 transition-colors w-fit"
             >
               View queries →
@@ -1149,6 +1262,20 @@ function KnowledgeInner() {
           brandName={brandName}
           csvFilenamePrefix={bviDrawerConfigs[bviDrawer].csvPrefix}
           onClose={() => setBviDrawer(null)}
+        />
+      )}
+
+      {/* Knowledge accuracy drill-down drawer */}
+      {knowledgeDrawer && knowledgeDrawerConfigs[knowledgeDrawer] && (
+        <MetricDetailDrawer
+          title={knowledgeDrawerConfigs[knowledgeDrawer].title}
+          metricValue={knowledgeDrawerConfigs[knowledgeDrawer].metricValue}
+          metricColor={knowledgeDrawerConfigs[knowledgeDrawer].metricColor}
+          subtitle={knowledgeDrawerConfigs[knowledgeDrawer].subtitle}
+          runs={knowledgeDrawerConfigs[knowledgeDrawer].runs}
+          brandName={brandName}
+          csvFilenamePrefix={knowledgeDrawerConfigs[knowledgeDrawer].csvPrefix}
+          onClose={() => setKnowledgeDrawer(null)}
         />
       )}
     </div>
