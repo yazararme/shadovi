@@ -516,7 +516,7 @@ function KnowledgeInner() {
 
         {/* Composite BVI Score */}
         <div
-          className={`border border-[#E2E8F0] rounded-lg p-5 bg-white${hasBaitData ? " cursor-pointer hover:border-[#0D0437]/20 hover:shadow-sm transition-all" : ""}`}
+          className={`border border-[#E2E8F0] rounded-lg p-5 bg-white transition-all${hasBaitData ? " cursor-pointer hover:border-[#0D0437]/20 hover:shadow-sm" : ""}`}
           onClick={hasBaitData ? () => setBviDrawer("bvi_score") : undefined}
         >
           <p className="text-[9px] font-bold tracking-[2px] uppercase text-[#6B7280] mb-2">BVI Score</p>
@@ -538,7 +538,7 @@ function KnowledgeInner() {
           <p className="text-[11px] text-[#6B7280] mt-2">
             Lower is better — measures how easily LLMs confirm false claims about your brand
           </p>
-          {hasBaitData && (
+          {hasBaitData ? (
             <button
               type="button"
               onClick={(e) => { e.stopPropagation(); setBviDrawer("bvi_score"); }}
@@ -546,12 +546,16 @@ function KnowledgeInner() {
             >
               View queries →
             </button>
+          ) : (
+            <p className="text-[9px] font-bold uppercase tracking-wide text-[#D1D5DB] mt-2">
+              No bait data yet
+            </p>
           )}
         </div>
 
         {/* Frequency */}
         <div
-          className={`border border-[#E2E8F0] rounded-lg p-5 bg-white${hasBaitData ? " cursor-pointer hover:border-[#0D0437]/20 hover:shadow-sm transition-all" : ""}`}
+          className={`border border-[#E2E8F0] rounded-lg p-5 bg-white transition-all${hasBaitData ? " cursor-pointer hover:border-[#0D0437]/20 hover:shadow-sm" : ""}`}
           onClick={hasBaitData ? () => setBviDrawer("trigger_rate") : undefined}
         >
           <p className="text-[9px] font-bold tracking-[2px] uppercase text-[#6B7280] mb-2">Bait Trigger Rate</p>
@@ -575,7 +579,7 @@ function KnowledgeInner() {
               ? `${bviResult.baitTriggeredCount} of ${bviResult.baitRunsTotal} bait queries triggered a hallucination`
               : "No bait queries found"}
           </p>
-          {hasBaitData && (
+          {hasBaitData ? (
             <button
               type="button"
               onClick={(e) => { e.stopPropagation(); setBviDrawer("trigger_rate"); }}
@@ -583,12 +587,16 @@ function KnowledgeInner() {
             >
               View queries →
             </button>
+          ) : (
+            <p className="text-[9px] font-bold uppercase tracking-wide text-[#D1D5DB] mt-2">
+              No bait data yet
+            </p>
           )}
         </div>
 
         {/* Replication */}
         <div
-          className={`border border-[#E2E8F0] rounded-lg p-5 bg-white${hasBaitData ? " cursor-pointer hover:border-[#0D0437]/20 hover:shadow-sm transition-all" : ""}`}
+          className={`border border-[#E2E8F0] rounded-lg p-5 bg-white transition-all${hasBaitData ? " cursor-pointer hover:border-[#0D0437]/20 hover:shadow-sm" : ""}`}
           onClick={hasBaitData ? () => setBviDrawer("cross_model") : undefined}
         >
           <p className="text-[9px] font-bold tracking-[2px] uppercase text-[#6B7280] mb-2">Cross-Model Spread</p>
@@ -610,7 +618,7 @@ function KnowledgeInner() {
           <p className="text-[11px] text-[#6B7280] mt-2">
             Average % of models that confirm the same false claim
           </p>
-          {hasBaitData && (
+          {hasBaitData ? (
             <button
               type="button"
               onClick={(e) => { e.stopPropagation(); setBviDrawer("cross_model"); }}
@@ -618,6 +626,10 @@ function KnowledgeInner() {
             >
               View queries →
             </button>
+          ) : (
+            <p className="text-[9px] font-bold uppercase tracking-wide text-[#D1D5DB] mt-2">
+              No bait data yet
+            </p>
           )}
         </div>
 

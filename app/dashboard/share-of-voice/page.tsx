@@ -1,11 +1,12 @@
 "use client";
 
-import { useEffect, useRef, useState, Suspense } from "react";
+import { useEffect, useMemo, useRef, useState, Suspense } from "react";
 import { useClientContext } from "@/context/ClientContext";
 import { createClient } from "@/lib/supabase/client";
 import { ModelIntentHeatmap, type HeatmapRow } from "@/components/dashboard/ModelIntentHeatmap";
 import { NarrativePathway } from "@/components/dashboard/NarrativePathway";
 import { ResponseDrawer, type RunOption } from "@/components/dashboard/ResponseDrawer";
+import { MetricDetailDrawer, type MetricDetailRun } from "@/components/dashboard/MetricDetailDrawer";
 import { Skeleton } from "@/components/ui/skeleton";
 import { ChevronDown, ChevronUp } from "lucide-react";
 import Link from "next/link";
@@ -254,6 +255,12 @@ function ShareOfVoiceInner() {
 
   const [activeClusterId, setActiveClusterId] = useState<string | null>(null);
   const [drawer, setDrawer] = useState<DrawerState | null>(null);
+  const [heatmapDrawer, setHeatmapDrawer] = useState<{
+    entityName: string;
+    model: LLMModel;
+    isBrand: boolean;
+    isSpecialRow: boolean;
+  } | null>(null);
 
   const gapClustersRef = useRef<HTMLDivElement>(null);
 
@@ -564,6 +571,86 @@ function ShareOfVoiceInner() {
     return true;
   });
 
+  // ── Derived: Heatmap drawer data ─────────────────────────────────────────
+  const heatmapDrawerData = useMemo(() => {
+    if (!heatmapDrawer) return null;
+    const { entityName, model, isBrand, isSpecialRow } = heatmapDrawer;
+
+    const modelRuns = filteredRuns.filter((r) => r.model === model);
+    const total = modelRuns.length;
+
+    let mentionedRuns: EnrichedRun[];
+    let notMentionedRuns: EnrichedRun[];
+
+    if (isBrand) {
+      // Brand row: use rbm-based matching (same as heatmap builder)
+      const brandMentionedQIds = new Set(
+        filteredRbm
+          .filter((r) => r.brand_name.toLowerCase() === lowerBrandName && r.model === model)
+          .map((r) => r.query_id)
+      );
+      mentionedRuns = modelRuns.filter((r) => brandMentionedQIds.has(r.query_id));
+      notMentionedRuns = modelRuns.filter((r) => !brandMentionedQIds.has(r.query_id));
+
+    } else if (isSpecialRow) {
+      // "No Brand Visible" — runs where no entity appears in rbm AND no competitors_mentioned
+      const anyEntityQIds = new Set(
+        filteredRbm.filter((r) => r.model === model).map((r) => r.query_id)
+      );
+      mentionedRuns = modelRuns.filter(
+        (r) => !anyEntityQIds.has(r.query_id) && (r.competitors_mentioned ?? []).length === 0
+      );
+      notMentionedRuns = modelRuns.filter(
+        (r) => anyEntityQIds.has(r.query_id) || (r.competitors_mentioned ?? []).length > 0
+      );
+
+    } else {
+      // Competitor row: normalized substring matching (same as heatmap builder)
+      const lowerCompName = entityName.toLowerCase().trim();
+      const isCompMentioned = (r: EnrichedRun) =>
+        (r.competitors_mentioned ?? []).some((m) => {
+          const lowerM = m.toLowerCase().trim();
+          return lowerM === lowerCompName || lowerCompName.includes(lowerM) || lowerM.includes(lowerCompName);
+        });
+      mentionedRuns = modelRuns.filter(isCompMentioned);
+      notMentionedRuns = modelRuns.filter((r) => !isCompMentioned(r));
+    }
+
+    const rate = total > 0 ? Math.round((mentionedRuns.length / total) * 100) : 0;
+    const modelLabel = MODEL_LABELS[model] ?? model;
+
+    const toDrawerRun = (r: EnrichedRun, wasMentioned: boolean): MetricDetailRun => ({
+      id: r.id,
+      queryText: r.query_text,
+      queryIntent: r.query_intent ?? "problem_aware",
+      model: r.model,
+      mentionSentiment: wasMentioned ? "positive" : "not_mentioned",
+      ranAt: r.ran_at,
+      rawResponse: r.raw_response ?? undefined,
+      isBait: false,
+      baitTriggered: false,
+      competitorsMentioned: r.competitors_mentioned ?? [],
+    });
+
+    const drawerRuns = [
+      ...mentionedRuns.map((r) => toDrawerRun(r, true)),
+      ...notMentionedRuns.map((r) => toDrawerRun(r, false)),
+    ];
+
+    return {
+      title: isSpecialRow
+        ? `No Brand Visible on ${modelLabel}`
+        : `${entityName} on ${modelLabel}`,
+      metricValue: `${rate}%`,
+      metricColor: isBrand
+        ? (rate >= 40 ? "#1A8F5C" : rate >= 20 ? "#F59E0B" : "#FF4B6E")
+        : "#0D0437",
+      subtitle: `${mentionedRuns.length} mentioned · ${notMentionedRuns.length} not mentioned · ${total} total queries`,
+      runs: drawerRuns,
+      csvPrefix: `${brandName}_${entityName.replace(/\s+/g, "_")}_${model}_sov`,
+    };
+  }, [heatmapDrawer, filteredRuns, filteredRbm, lowerBrandName, brandName]);
+
   // ── Derived: Visibility Trend ─────────────────────────────────────────────
   // problem_aware + category only; date + model filter already applied via baseRuns
   const trendRuns = baseRuns.filter(
@@ -804,7 +891,14 @@ function ShareOfVoiceInner() {
       <SectionLabel>Share of Model Heatmap</SectionLabel>
 
       <div className="mb-2">
-        <ModelIntentHeatmap rows={visibleHeatmapRows} models={filteredModels} />
+        <ModelIntentHeatmap
+          rows={visibleHeatmapRows}
+          models={filteredModels}
+          onCellClick={(entityName, model, isBrand, isSpecialRow) => {
+            setDrawer(null);
+            setHeatmapDrawer({ entityName, model, isBrand, isSpecialRow });
+          }}
+        />
       </div>
 
       {zeroPresenceNames.length > 0 && (
@@ -939,7 +1033,7 @@ function ShareOfVoiceInner() {
                       citedSources={g.citedSources}
                       competitorsMentioned={g.competitorsMentioned}
                       clientId={client.id}
-                      onViewResponse={() => setDrawer({ runs: g.allRuns, queryText: g.queryText })}
+                      onViewResponse={() => { setHeatmapDrawer(null); setDrawer({ runs: g.allRuns, queryText: g.queryText }); }}
                     />
                   ))}
                 </div>
@@ -988,6 +1082,7 @@ function ShareOfVoiceInner() {
                         if (seen.has(r.model)) return false;
                         seen.add(r.model); return true;
                       });
+                      setHeatmapDrawer(null);
                       setDrawer({ runs: deduped.length > 0 ? deduped : [comp.sampleRun], queryText: comp.sampleQueryText });
                     }}
                   >
@@ -1026,6 +1121,7 @@ function ShareOfVoiceInner() {
                               if (seen.has(r.model)) return false;
                               seen.add(r.model); return true;
                             });
+                            setHeatmapDrawer(null);
                             setDrawer({ runs: deduped.length > 0 ? deduped : [comp.sampleRun!], queryText: comp.sampleQueryText });
                           }}
                           className="mt-1.5 text-[9px] font-bold uppercase tracking-wide text-[#9CA3AF] hover:text-[#0D0437] transition-colors"
@@ -1053,6 +1149,20 @@ function ShareOfVoiceInner() {
           }))}
           brandName={brandName}
           onClose={() => setDrawer(null)}
+        />
+      )}
+
+      {/* Heatmap drill-down drawer */}
+      {heatmapDrawer && heatmapDrawerData && (
+        <MetricDetailDrawer
+          title={heatmapDrawerData.title}
+          metricValue={heatmapDrawerData.metricValue}
+          metricColor={heatmapDrawerData.metricColor}
+          subtitle={heatmapDrawerData.subtitle}
+          runs={heatmapDrawerData.runs}
+          brandName={brandName}
+          csvFilenamePrefix={heatmapDrawerData.csvPrefix}
+          onClose={() => setHeatmapDrawer(null)}
         />
       )}
       </div>

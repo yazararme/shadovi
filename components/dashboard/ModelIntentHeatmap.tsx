@@ -22,6 +22,7 @@ export interface HeatmapRow {
 interface ModelIntentHeatmapProps {
   rows: HeatmapRow[];
   models: LLMModel[];
+  onCellClick?: (entityName: string, model: LLMModel, isBrand: boolean, isSpecialRow: boolean) => void;
 }
 
 const MODEL_LABELS: Record<LLMModel, string> = {
@@ -48,7 +49,7 @@ function cellTextColor(rate: number): string {
   return rate > 50 ? "text-foreground" : "text-muted-foreground";
 }
 
-export function ModelIntentHeatmap({ rows, models }: ModelIntentHeatmapProps) {
+export function ModelIntentHeatmap({ rows, models, onCellClick }: ModelIntentHeatmapProps) {
   const [hoveredCell, setHoveredCell] = useState<{
     rowIdx: number;
     model: LLMModel;
@@ -115,7 +116,10 @@ export function ModelIntentHeatmap({ rows, models }: ModelIntentHeatmapProps) {
                 return (
                   <td
                     key={model}
-                    className="px-4 py-3 text-center relative"
+                    className={cn(
+                      "px-4 py-3 text-center relative",
+                      onCellClick && "cursor-pointer hover:ring-2 hover:ring-[#0D0437]/20 hover:ring-inset transition-shadow"
+                    )}
                     style={{
                       backgroundColor: row.isSpecialRow ? specialCellColor(rate) : cellColor(rate),
                     }}
@@ -123,6 +127,7 @@ export function ModelIntentHeatmap({ rows, models }: ModelIntentHeatmapProps) {
                       setHoveredCell({ rowIdx, model })
                     }
                     onMouseLeave={() => setHoveredCell(null)}
+                    onClick={() => onCellClick?.(row.name, model, row.isBrand, row.isSpecialRow ?? false)}
                   >
                     <div
                       className={cn(
