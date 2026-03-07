@@ -7,6 +7,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { AlertTriangle, ChevronDown, ChevronUp } from "lucide-react";
 import { DrillDownSlideOver } from "@/components/brand-knowledge/DrillDownSlideOver";
 import type { DrillDownFilters } from "@/hooks/useDrillDownData";
+import { MetricDetailDrawer, type MetricDetailRun } from "@/components/dashboard/MetricDetailDrawer";
 import { computeBVI, bviColor } from "@/lib/bvi/compute-bvi";
 import type {
   Client,
@@ -198,6 +199,9 @@ function KnowledgeInner() {
   // Expand/collapse state for grouped table rows
   const [expandedTableGroups, setExpandedTableGroups] = useState<Set<string>>(new Set());
 
+  // BVI drawer state
+  const [bviDrawer, setBviDrawer] = useState<"bvi_score" | "trigger_rate" | "cross_model" | null>(null);
+
   // Drill-down slide-over state
   const [drillDown, setDrillDown] = useState<{
     open: boolean;
@@ -383,6 +387,62 @@ function KnowledgeInner() {
     trackedModels
   );
 
+  // ── BVI drawer data ──────────────────────────────────────────────────────
+  const hasBaitData = bviResult.baitRunsTotal > 0;
+  const brandName = client?.brand_name ?? client?.url ?? "";
+
+  const baitDrawerRuns: MetricDetailRun[] = scores
+    .filter((s) => !s.fact_is_true)
+    .map((s) => ({
+      id: s.tracking_run_id ?? s.id ?? crypto.randomUUID(),
+      queryText: s.query_text ?? s.fact_claim ?? "",
+      queryIntent: "validation",
+      model: s.model,
+      mentionSentiment: null,
+      ranAt: s.scored_at,
+      rawResponse: s.raw_response ?? undefined,
+      isBait: true,
+      baitTriggered: s.bait_triggered ?? false,
+      competitorsMentioned: [],
+    }))
+    .sort((a, b) => {
+      if (a.baitTriggered !== b.baitTriggered) return b.baitTriggered ? 1 : -1;
+      return new Date(b.ranAt).getTime() - new Date(a.ranAt).getTime();
+    });
+
+  const crossModelDrawerRuns = [...baitDrawerRuns].sort((a, b) => {
+    const textCompare = a.queryText.localeCompare(b.queryText);
+    if (textCompare !== 0) return textCompare;
+    return a.model.localeCompare(b.model);
+  });
+
+  const bviDrawerConfigs = {
+    bvi_score: {
+      title: "BVI Score Breakdown",
+      metricValue: bviResult.composite !== null ? `${bviResult.composite}` : "—",
+      metricColor: bviColor(bviResult.composite),
+      subtitle: `${bviResult.baitTriggeredCount} of ${bviResult.baitRunsTotal} bait queries triggered a hallucination`,
+      runs: baitDrawerRuns,
+      csvPrefix: `${brandName}_bvi_score`,
+    },
+    trigger_rate: {
+      title: "Bait Trigger Rate",
+      metricValue: bviResult.frequency !== null ? `${bviResult.frequency}%` : "—",
+      metricColor: bviColor(bviResult.frequency),
+      subtitle: `${bviResult.baitTriggeredCount} of ${bviResult.baitRunsTotal} bait queries triggered`,
+      runs: baitDrawerRuns,
+      csvPrefix: `${brandName}_bait_trigger_rate`,
+    },
+    cross_model: {
+      title: "Cross-Model Spread",
+      metricValue: bviResult.replication !== null ? `${bviResult.replication}%` : "—",
+      metricColor: bviColor(bviResult.replication),
+      subtitle: "Average % of models confirming the same false claim",
+      runs: crossModelDrawerRuns,
+      csvPrefix: `${brandName}_cross_model_spread`,
+    },
+  };
+
   return (
     <div>
       {/* Header */}
@@ -455,7 +515,10 @@ function KnowledgeInner() {
       <div className="grid grid-cols-2 sm:grid-cols-5 gap-4 mb-6">
 
         {/* Composite BVI Score */}
-        <div className="border border-[#E2E8F0] rounded-lg p-5 bg-white">
+        <div
+          className={`border border-[#E2E8F0] rounded-lg p-5 bg-white${hasBaitData ? " cursor-pointer hover:border-[#0D0437]/20 hover:shadow-sm transition-all" : ""}`}
+          onClick={hasBaitData ? () => setBviDrawer("bvi_score") : undefined}
+        >
           <p className="text-[9px] font-bold tracking-[2px] uppercase text-[#6B7280] mb-2">BVI Score</p>
           {bviResult.composite !== null ? (
             <>
@@ -475,16 +538,22 @@ function KnowledgeInner() {
           <p className="text-[11px] text-[#6B7280] mt-2">
             Lower is better — measures how easily LLMs confirm false claims about your brand
           </p>
-          <button
-            onClick={() => document.getElementById("bvi-alerts")?.scrollIntoView({ behavior: "smooth" })}
-            className="flex items-center gap-0.5 text-[9px] font-bold uppercase tracking-wide text-[#9CA3AF] hover:text-[#0D0437] mt-2 transition-colors w-fit"
-          >
-            View details →
-          </button>
+          {hasBaitData && (
+            <button
+              type="button"
+              onClick={(e) => { e.stopPropagation(); setBviDrawer("bvi_score"); }}
+              className="flex items-center gap-0.5 text-[9px] font-bold uppercase tracking-wide text-[#9CA3AF] hover:text-[#0D0437] mt-2 transition-colors w-fit"
+            >
+              View queries →
+            </button>
+          )}
         </div>
 
         {/* Frequency */}
-        <div className="border border-[#E2E8F0] rounded-lg p-5 bg-white">
+        <div
+          className={`border border-[#E2E8F0] rounded-lg p-5 bg-white${hasBaitData ? " cursor-pointer hover:border-[#0D0437]/20 hover:shadow-sm transition-all" : ""}`}
+          onClick={hasBaitData ? () => setBviDrawer("trigger_rate") : undefined}
+        >
           <p className="text-[9px] font-bold tracking-[2px] uppercase text-[#6B7280] mb-2">Bait Trigger Rate</p>
           {bviResult.frequency !== null ? (
             <>
@@ -506,10 +575,22 @@ function KnowledgeInner() {
               ? `${bviResult.baitTriggeredCount} of ${bviResult.baitRunsTotal} bait queries triggered a hallucination`
               : "No bait queries found"}
           </p>
+          {hasBaitData && (
+            <button
+              type="button"
+              onClick={(e) => { e.stopPropagation(); setBviDrawer("trigger_rate"); }}
+              className="flex items-center gap-0.5 text-[9px] font-bold uppercase tracking-wide text-[#9CA3AF] hover:text-[#0D0437] mt-2 transition-colors w-fit"
+            >
+              View queries →
+            </button>
+          )}
         </div>
 
         {/* Replication */}
-        <div className="border border-[#E2E8F0] rounded-lg p-5 bg-white">
+        <div
+          className={`border border-[#E2E8F0] rounded-lg p-5 bg-white${hasBaitData ? " cursor-pointer hover:border-[#0D0437]/20 hover:shadow-sm transition-all" : ""}`}
+          onClick={hasBaitData ? () => setBviDrawer("cross_model") : undefined}
+        >
           <p className="text-[9px] font-bold tracking-[2px] uppercase text-[#6B7280] mb-2">Cross-Model Spread</p>
           {bviResult.replication !== null ? (
             <>
@@ -529,6 +610,15 @@ function KnowledgeInner() {
           <p className="text-[11px] text-[#6B7280] mt-2">
             Average % of models that confirm the same false claim
           </p>
+          {hasBaitData && (
+            <button
+              type="button"
+              onClick={(e) => { e.stopPropagation(); setBviDrawer("cross_model"); }}
+              className="flex items-center gap-0.5 text-[9px] font-bold uppercase tracking-wide text-[#9CA3AF] hover:text-[#0D0437] mt-2 transition-colors w-fit"
+            >
+              View queries →
+            </button>
+          )}
         </div>
 
         {/* Severity — future, greyed out */}
@@ -1035,6 +1125,20 @@ function KnowledgeInner() {
             </tbody>
           </table>
       </div>
+
+      {/* BVI drill-down drawer */}
+      {bviDrawer && bviDrawerConfigs[bviDrawer] && (
+        <MetricDetailDrawer
+          title={bviDrawerConfigs[bviDrawer].title}
+          metricValue={bviDrawerConfigs[bviDrawer].metricValue}
+          metricColor={bviDrawerConfigs[bviDrawer].metricColor}
+          subtitle={bviDrawerConfigs[bviDrawer].subtitle}
+          runs={bviDrawerConfigs[bviDrawer].runs}
+          brandName={brandName}
+          csvFilenamePrefix={bviDrawerConfigs[bviDrawer].csvPrefix}
+          onClose={() => setBviDrawer(null)}
+        />
+      )}
     </div>
   );
 }
