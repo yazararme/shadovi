@@ -314,7 +314,7 @@ function DomainTableRow({ d, compact = false }: { d: DomainStat; compact?: boole
 
 function SourceIntelInner() {
   const searchParams = useSearchParams();
-  const { activeClientId: clientIdParam } = useClientContext();
+  const { activeClientId: clientIdParam, loading: contextLoading } = useClientContext();
   const claimFactId  = searchParams.get("claim_fact_id");
 
   const [client,       setClient]       = useState<Client | null>(null);
@@ -335,15 +335,17 @@ function SourceIntelInner() {
     setOtherExpanded(!!claimFactId); // auto-expand when claim filter is active
     loadData();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [clientIdParam, claimFactId]);
+  }, [clientIdParam, claimFactId, contextLoading]);
 
   async function loadData() {
+    // Guard: wait for ClientContext to resolve — prevents fetching without a client filter
+    if (!clientIdParam) return;
     setLoading(true);
     const supabase = createClient();
 
-    let q = supabase.from("clients").select("*").eq("status", "active");
-    if (clientIdParam) q = q.eq("id", clientIdParam);
-    const { data: clients } = await q.order("created_at", { ascending: false }).limit(1);
+    const { data: clients } = await supabase.from("clients").select("*").eq("status", "active")
+      .eq("id", clientIdParam)
+      .order("created_at", { ascending: false }).limit(1);
     const activeClient = clients?.[0] ?? null;
     setClient(activeClient);
 

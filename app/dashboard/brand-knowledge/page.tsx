@@ -263,7 +263,7 @@ function buildFactModelGroups(scores: EnrichedScore[]): FactModelGroup[] {
 }
 
 function BrandKnowledgeInner() {
-  const { activeClientId: clientIdParam } = useClientContext();
+  const { activeClientId: clientIdParam, loading: contextLoading } = useClientContext();
   const [client, setClient] = useState<Client | null>(null);
   const [scores, setScores] = useState<EnrichedScore[]>([]);
   const [loading, setLoading] = useState(true);
@@ -390,13 +390,14 @@ function BrandKnowledgeInner() {
     setModelFilter(urlModels?.length ? urlModels : null);
     loadData();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [clientIdParam]);
+  }, [clientIdParam, contextLoading]);
 
   async function loadData() {
+    // Guard: wait for ClientContext to resolve — prevents fetching without a client filter
+    if (!clientIdParam) return;
     const supabase = createClient();
-    let q = supabase.from("clients").select("*").eq("status", "active");
-    if (clientIdParam) q = q.eq("id", clientIdParam);
-    const { data: clients } = await q
+    const { data: clients } = await supabase.from("clients").select("*").eq("status", "active")
+      .eq("id", clientIdParam)
       .order("created_at", { ascending: false })
       .limit(1);
 

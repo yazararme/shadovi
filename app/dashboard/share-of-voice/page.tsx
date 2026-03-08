@@ -231,7 +231,7 @@ interface RbmRow {
 // ── Main component ─────────────────────────────────────────────────────────────
 
 function ShareOfVoiceInner() {
-  const { activeClientId: clientIdParam } = useClientContext();
+  const { activeClientId: clientIdParam, loading: contextLoading } = useClientContext();
 
   const [client, setClient] = useState<Client | null>(null);
   const [loading, setLoading] = useState(true);
@@ -278,12 +278,14 @@ function ShareOfVoiceInner() {
     let cancelled = false;
 
     async function load() {
+      // Guard: wait for ClientContext to resolve — prevents fetching without a client filter
+      if (!clientIdParam) return;
       setLoading(true);
       const supabase = createClient();
 
-      let q = supabase.from("clients").select("*").eq("status", "active");
-      if (clientIdParam) q = q.eq("id", clientIdParam);
-      const { data: clients } = await q.order("created_at", { ascending: false }).limit(1);
+      const { data: clients } = await supabase.from("clients").select("*").eq("status", "active")
+        .eq("id", clientIdParam)
+        .order("created_at", { ascending: false }).limit(1);
 
       if (cancelled) return;
       const c = (clients?.[0] as Client) ?? null;
@@ -398,7 +400,7 @@ function ShareOfVoiceInner() {
 
     load();
     return () => { cancelled = true; };
-  }, [clientIdParam]);
+  }, [clientIdParam, contextLoading]);
 
   // ── Loading ────────────────────────────────────────────────────────────────
 

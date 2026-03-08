@@ -285,7 +285,7 @@ function RecCard({
 
 function RoadmapInner() {
   const searchParams = useSearchParams();
-  const { activeClientId: clientIdParam } = useClientContext();
+  const { activeClientId: clientIdParam, loading: contextLoading } = useClientContext();
   const highlightId = searchParams.get("highlight");
 
   const [client,      setClient]      = useState<Client | null>(null);
@@ -303,7 +303,7 @@ function RoadmapInner() {
   useEffect(() => {
     loadData();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [clientIdParam]);
+  }, [clientIdParam, contextLoading]);
 
   useEffect(() => {
     if (loading || !highlightId || highlightFired.current) return;
@@ -322,12 +322,14 @@ function RoadmapInner() {
   }, [loading, highlightId]);
 
   async function loadData() {
+    // Guard: wait for ClientContext to resolve — prevents fetching without a client filter
+    if (!clientIdParam) return;
     setLoading(true);
     const supabase = createClient();
 
-    let q = supabase.from("clients").select("*").eq("status", "active");
-    if (clientIdParam) q = q.eq("id", clientIdParam);
-    const { data: clients } = await q.order("created_at", { ascending: false }).limit(1);
+    const { data: clients } = await supabase.from("clients").select("*").eq("status", "active")
+      .eq("id", clientIdParam)
+      .order("created_at", { ascending: false }).limit(1);
     const activeClient = clients?.[0] ?? null;
     setClient(activeClient);
 

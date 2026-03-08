@@ -904,7 +904,7 @@ function LeftPanel({ queries, setQueries, activeIntent, setActiveIntent, clientI
 // ── Inner component ───────────────────────────────────────────────────────────
 
 function SettingsInner() {
-  const { activeClientId: clientId } = useClientContext();
+  const { activeClientId: clientId, loading: contextLoading } = useClientContext();
 
   const [data, setData] = useState<PageData | null>(null);
   const [queries, setQueries] = useState<Query[]>([]);
@@ -959,7 +959,7 @@ function SettingsInner() {
     } finally {
       setLoading(false);
     }
-  }, [clientId]);
+  }, [clientId, contextLoading]);
 
   useEffect(() => { fetchData(); }, [fetchData]);
 

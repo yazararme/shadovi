@@ -172,7 +172,7 @@ interface DrawerState {
 // ── Main component ─────────────────────────────────────────────────────────────
 
 function OverviewInner() {
-  const { activeClientId, isAdmin } = useClientContext();
+  const { activeClientId, isAdmin, loading: contextLoading } = useClientContext();
   const searchParams = useSearchParams();
   // Prefer the URL ?client= param — it's set synchronously before render and is
   // always correct. The context's activeClientId resolves asynchronously and may
@@ -218,11 +218,13 @@ function OverviewInner() {
     let cancelled = false;
 
     async function loadClient() {
+      // Guard: wait for ClientContext to resolve — prevents fetching without a client filter
+      if (!clientIdParam) return;
       setClientLoading(true);
       const supabase = createClient();
 
-      const q = supabase.from("clients").select("*").eq("status", "active");
-      const { data } = await (clientIdParam ? q.eq("id", clientIdParam) : q)
+      const { data } = await supabase.from("clients").select("*").eq("status", "active")
+        .eq("id", clientIdParam)
         .order("created_at", { ascending: false })
         .limit(1);
       if (cancelled) return;
@@ -453,7 +455,7 @@ function OverviewInner() {
 
     loadClient();
     return () => { cancelled = true; };
-  }, [clientIdParam]);
+  }, [clientIdParam, contextLoading]);
 
   // ── Run now ────────────────────────────────────────────────────────────────
 

@@ -607,7 +607,7 @@ function NegativeAlerts({ clientId, brandName }: { clientId: string | null; bran
 // ── Page inner ─────────────────────────────────────────────────────────────────
 
 function ToneOfVoiceInner() {
-  const { activeClientId: clientId } = useClientContext();
+  const { activeClientId: clientId, loading: contextLoading } = useClientContext();
 
   const [snapshotCounts, setSnapshotCounts] = useState<SentimentCounts | null>(null);
   const [brandMap,       setBrandMap      ] = useState<BrandSentimentMap | null>(null);
@@ -707,7 +707,7 @@ function ToneOfVoiceInner() {
 
     load();
     return () => { cancelled = true; };
-  }, [clientId]);
+  }, [clientId, contextLoading]);
 
   return (
     <div className="p-8 max-w-[1000px] mx-auto">
