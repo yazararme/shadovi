@@ -40,6 +40,7 @@ interface MentionRow {
   mention_context:   string | null;
   tracking_run_id:   string;
   query_intent:      string | null;
+  query_text:        string;
   created_at:        string;
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   tracking_runs:     any;
@@ -54,6 +55,7 @@ interface NegativeAlertRow {
   query_text:       string;
   raw_response:     string | null;
   competitors_mentioned: string[];
+  source_attribution: unknown[] | null;
 }
 
 // brand_name → SentimentCounts
@@ -458,7 +460,7 @@ function NegativeAlerts({ clientId, brandName }: { clientId: string | null; bran
           created_at,
           tracking_run_id,
           queries(text),
-          tracking_runs(raw_response, competitors_mentioned)
+          tracking_runs(raw_response, competitors_mentioned, source_attribution)
         `)
         .eq("client_id", clientId)
         .eq("is_tracked_brand", true)
@@ -483,6 +485,7 @@ function NegativeAlerts({ clientId, brandName }: { clientId: string | null; bran
         query_text:           (r.queries as { text: string } | null)?.text ?? "",
         raw_response:         (r.tracking_runs as { raw_response: string | null } | null)?.raw_response ?? null,
         competitors_mentioned:(r.tracking_runs as { competitors_mentioned: string[] | null } | null)?.competitors_mentioned ?? [],
+        source_attribution:   (r.tracking_runs as { source_attribution: unknown[] | null } | null)?.source_attribution ?? null,
       }));
 
       setAlerts(rows);
@@ -592,7 +595,7 @@ function ToneOfVoiceInner() {
       const [mentionsResult, competitorsResult] = await Promise.all([
         supabase
           .from("response_brand_mentions")
-          .select("id, brand_name, is_tracked_brand, mention_sentiment, model, mention_context, tracking_run_id, query_intent, created_at, tracking_runs(raw_response, query_id, competitors_mentioned)")
+          .select("id, brand_name, is_tracked_brand, mention_sentiment, model, mention_context, tracking_run_id, query_intent, created_at, tracking_runs(raw_response, query_id, competitors_mentioned, source_attribution, queries(text))")
           .eq("client_id", clientId)
           .eq("query_intent", "comparative")
           .not("mention_sentiment", "is", null),
@@ -609,7 +612,10 @@ function ToneOfVoiceInner() {
         return;
       }
 
-      const rows = (mentionsResult.data ?? []) as MentionRow[];
+      const rows = (mentionsResult.data ?? []).map((r: Record<string, unknown>) => ({
+        ...r,
+        query_text: ((r.tracking_runs as { queries?: { text: string } | null } | null)?.queries?.text) ?? "",
+      })) as MentionRow[];
       // Build a normalised set of user-selected competitor names for chart filtering
       const competitorNameSet = new Set(
         (competitorsResult.data ?? []).map((c: { name: string }) =>
@@ -739,7 +745,7 @@ function ToneOfVoiceInner() {
 
         const drawerRuns = filtered.map((m) => ({
           id: m.id,
-          queryText: m.mention_context ?? "(no context available)",
+          queryText: m.query_text || "(no query text)",
           queryIntent: m.query_intent ?? "comparative",
           model: m.model,
           mentionSentiment: m.mention_sentiment,
@@ -748,6 +754,8 @@ function ToneOfVoiceInner() {
           isBait: false,
           baitTriggered: false,
           competitorsMentioned: ((m.tracking_runs as { competitors_mentioned?: string[] | null } | null)?.competitors_mentioned ?? []),
+          mentionContext: m.mention_context,
+          sourceAttribution: (m.tracking_runs as { source_attribution?: unknown[] | null } | null)?.source_attribution ?? null,
         }));
 
         return (
@@ -778,7 +786,7 @@ function ToneOfVoiceInner() {
 
         const drawerRuns = filteredMentions.map((m) => ({
           id: m.id,
-          queryText: m.mention_context ?? "(no context available)",
+          queryText: m.query_text || "(no query text)",
           queryIntent: m.query_intent ?? "comparative",
           model: m.model,
           mentionSentiment: m.mention_sentiment,
@@ -787,6 +795,8 @@ function ToneOfVoiceInner() {
           isBait: false,
           baitTriggered: false,
           competitorsMentioned: ((m.tracking_runs as { competitors_mentioned?: string[] | null } | null)?.competitors_mentioned ?? []),
+          mentionContext: m.mention_context,
+          sourceAttribution: (m.tracking_runs as { source_attribution?: unknown[] | null } | null)?.source_attribution ?? null,
         }));
 
         return (

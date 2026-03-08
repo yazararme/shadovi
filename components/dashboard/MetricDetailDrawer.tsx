@@ -18,6 +18,9 @@ export interface MetricDetailRun {
   isBait?: boolean;
   baitTriggered?: boolean;
   competitorsMentioned?: string[];
+  mentionContext?: string | null;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  sourceAttribution?: any[] | null;
 }
 
 export interface MetricDetailDrawerProps {
@@ -116,6 +119,7 @@ export function MetricDetailDrawer({
 }: MetricDetailDrawerProps) {
   const [isOpen, setIsOpen] = useState(false);
   const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set());
+  const [sentimentFilter, setSentimentFilter] = useState<"all" | "positive" | "neutral" | "negative">("all");
 
   // Slide-in animation
   useEffect(() => {
@@ -196,7 +200,9 @@ export function MetricDetailDrawer({
         {/* ── Action bar ──────────────────────────────────────────────────── */}
         <div className="flex items-center justify-between px-6 py-2.5 border-b border-[#E2E8F0] shrink-0">
           <span className="text-[11px] text-[#6B7280]">
-            {runs.length} query {runs.length === 1 ? "run" : "runs"}
+            {sentimentFilter === "all"
+              ? `${runs.length} query ${runs.length === 1 ? "run" : "runs"}`
+              : `${runs.filter((r) => r.mentionSentiment === sentimentFilter).length} of ${runs.length} query runs`}
           </span>
           <button
             type="button"
@@ -208,6 +214,33 @@ export function MetricDetailDrawer({
           </button>
         </div>
 
+        {/* ── Sentiment filter pills ──────────────────────────────────────── */}
+        <div className="flex items-center gap-1.5 px-6 py-2 border-b border-[#E2E8F0] shrink-0">
+          {([
+            { key: "all",      label: "All",      activeBg: "#0D0437",  activeText: "#FFFFFF" },
+            { key: "positive", label: "Positive", activeBg: "#1A8F5C",  activeText: "#FFFFFF" },
+            { key: "neutral",  label: "Neutral",  activeBg: "#6B7280",  activeText: "#FFFFFF" },
+            { key: "negative", label: "Negative", activeBg: "#FF4B6E",  activeText: "#FFFFFF" },
+          ] as const).map(({ key, label, activeBg, activeText }) => {
+            const active = sentimentFilter === key;
+            return (
+              <button
+                key={key}
+                type="button"
+                onClick={() => setSentimentFilter(key)}
+                className={`text-[10px] font-bold px-2.5 py-1 rounded-full border transition-colors ${
+                  active
+                    ? "border-transparent"
+                    : "border-[#E2E8F0] text-[#6B7280] hover:border-[#9CA3AF]"
+                }`}
+                style={active ? { background: activeBg, color: activeText } : undefined}
+              >
+                {label}
+              </button>
+            );
+          })}
+        </div>
+
         {/* ── Scrollable query list ───────────────────────────────────────── */}
         <div className="flex-1 overflow-y-auto min-h-0">
           {runs.length === 0 ? (
@@ -215,7 +248,9 @@ export function MetricDetailDrawer({
               <p className="text-[13px] text-[#9CA3AF]">No query runs match this metric.</p>
             </div>
           ) : (
-            runs.map((run) => {
+            runs
+            .filter((r) => sentimentFilter === "all" || r.mentionSentiment === sentimentFilter)
+            .map((run) => {
               const expanded = expandedIds.has(run.id);
               return (
                 <div
@@ -232,6 +267,11 @@ export function MetricDetailDrawer({
                     <p className={`text-[12px] font-medium text-[#0D0437] leading-snug ${expanded ? "" : "line-clamp-2"}`}>
                       &ldquo;{run.queryText}&rdquo;
                     </p>
+                    {run.mentionContext && (
+                      <p className="text-[11px] text-[#6B7280] leading-relaxed line-clamp-2 mt-1">
+                        {run.mentionContext}
+                      </p>
+                    )}
 
                     {/* Meta row */}
                     <div className="flex items-center gap-2 mt-2 flex-wrap">
@@ -277,9 +317,10 @@ export function MetricDetailDrawer({
                     </div>
                   </button>
 
-                  {/* Expanded: response body */}
+                  {/* Expanded: full response */}
                   {expanded && (
                     <div className="px-5 pb-4">
+                      <p className="text-[10px] font-bold uppercase tracking-[1.5px] text-[#9CA3AF] mb-2">Full Response</p>
                       <div className="bg-[#F9FAFB] rounded-lg p-4 max-h-[300px] overflow-y-auto">
                         {run.rawResponse?.trim() ? (
                           <MarkdownBody
@@ -288,9 +329,36 @@ export function MetricDetailDrawer({
                             competitorNames={run.competitorsMentioned ?? []}
                           />
                         ) : (
-                          <p className="text-[11px] text-[#9CA3AF] italic">No response data available</p>
+                          <p className="text-[11px] text-[#9CA3AF] italic">Response not available.</p>
                         )}
                       </div>
+                      {/* Sources */}
+                      {run.sourceAttribution && run.sourceAttribution.length > 0 && (
+                        <div className="mt-3">
+                          <p className="text-[10px] font-bold uppercase tracking-[1.5px] text-[#9CA3AF] mb-1.5">Sources</p>
+                          <div className="flex flex-col gap-1">
+                            {run.sourceAttribution.map((src: Record<string, unknown>, i: number) => {
+                              const name = (src.name ?? src.title ?? src.url ?? "Unknown source") as string;
+                              const url = src.url as string | undefined;
+                              const description = (src.description ?? src.domain) as string | undefined;
+                              return (
+                                <div key={i} className="text-[11px] leading-snug">
+                                  {url ? (
+                                    <a href={url} target="_blank" rel="noopener noreferrer" className="text-[#00B4D8] hover:underline">
+                                      {name}
+                                    </a>
+                                  ) : (
+                                    <span className="text-[#374151]">{name}</span>
+                                  )}
+                                  {description && (
+                                    <span className="text-[#9CA3AF]"> — {description}</span>
+                                  )}
+                                </div>
+                              );
+                            })}
+                          </div>
+                        </div>
+                      )}
                     </div>
                   )}
                 </div>
