@@ -21,6 +21,7 @@ export interface MetricDetailRun {
   mentionContext?: string | null;
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   sourceAttribution?: any[] | null;
+  citedSources?: string[] | null;
 }
 
 export interface MetricDetailDrawerProps {
@@ -65,6 +66,38 @@ const SENTIMENT_DOT: Record<string, string> = {
 };
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
+
+/** Merge cited_sources (string[]) and source_attribution (object[]) into a
+ *  deduplicated list of { url, domain } entries, max 5. Dedup by hostname. */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function mergeSourceUrls(citedSources?: string[] | null, sourceAttribution?: any[] | null): { url: string; domain: string }[] {
+  const seen = new Map<string, string>(); // domain → full url
+
+  // cited_sources first (plain URL strings)
+  for (const url of citedSources ?? []) {
+    if (!url) continue;
+    try {
+      const domain = new URL(url).hostname.replace("www.", "");
+      if (!seen.has(domain)) seen.set(domain, url);
+    } catch {
+      if (!seen.has(url)) seen.set(url, url);
+    }
+  }
+
+  // source_attribution: may be strings or objects with a url field
+  for (const src of sourceAttribution ?? []) {
+    const raw = typeof src === "string" ? src : (src as Record<string, unknown>)?.url;
+    if (!raw || typeof raw !== "string") continue;
+    try {
+      const domain = new URL(raw).hostname.replace("www.", "");
+      if (!seen.has(domain)) seen.set(domain, raw);
+    } catch {
+      if (!seen.has(raw)) seen.set(raw, raw);
+    }
+  }
+
+  return Array.from(seen.entries()).slice(0, 5).map(([domain, url]) => ({ url, domain }));
+}
 
 function formatTimeAgo(iso: string): string {
   const h = (Date.now() - new Date(iso).getTime()) / 3_600_000;
@@ -332,33 +365,23 @@ export function MetricDetailDrawer({
                           <p className="text-[11px] text-[#9CA3AF] italic">Response not available.</p>
                         )}
                       </div>
-                      {/* Sources */}
-                      {run.sourceAttribution && run.sourceAttribution.length > 0 && (
-                        <div className="mt-3">
-                          <p className="text-[10px] font-bold uppercase tracking-[1.5px] text-[#9CA3AF] mb-1.5">Sources</p>
-                          <div className="flex flex-col gap-1">
-                            {run.sourceAttribution.map((src: Record<string, unknown>, i: number) => {
-                              const name = (src.name ?? src.title ?? src.url ?? "Unknown source") as string;
-                              const url = src.url as string | undefined;
-                              const description = (src.description ?? src.domain) as string | undefined;
-                              return (
-                                <div key={i} className="text-[11px] leading-snug">
-                                  {url ? (
-                                    <a href={url} target="_blank" rel="noopener noreferrer" className="text-[#00B4D8] hover:underline">
-                                      {name}
-                                    </a>
-                                  ) : (
-                                    <span className="text-[#374151]">{name}</span>
-                                  )}
-                                  {description && (
-                                    <span className="text-[#9CA3AF]"> — {description}</span>
-                                  )}
-                                </div>
-                              );
-                            })}
+                      {/* Sources — merged & deduplicated from cited_sources + source_attribution */}
+                      {(() => {
+                        const sources = mergeSourceUrls(run.citedSources, run.sourceAttribution);
+                        if (sources.length === 0) return null;
+                        return (
+                          <div className="mt-3">
+                            <p className="text-[9px] font-bold tracking-[2px] uppercase text-[#6B7280] mb-1.5">Sources</p>
+                            <div className="flex flex-col gap-0.5">
+                              {sources.map((s, i) => (
+                                <a key={i} href={s.url} target="_blank" rel="noopener noreferrer" className="text-[11px] text-[#00B4D8] hover:underline truncate block">
+                                  {s.domain}
+                                </a>
+                              ))}
+                            </div>
                           </div>
-                        </div>
-                      )}
+                        );
+                      })()}
                     </div>
                   )}
                 </div>

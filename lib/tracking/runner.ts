@@ -167,7 +167,7 @@ For each brand found:
 Rules:
 - Include every brand mentioned, even briefly or in passing
 - Do not include generic category terms (e.g. "washing machine brand" is not a brand)
-- Do not include the brand you were asked about if it was named in the query — only include brands that appeared organically in the response
+- Always include the primary brand being asked about (the one named in the query) in your output, even if it appears in the question itself. It must appear as a brand entry with its own sentiment and context
 - If no brands are mentioned, return an empty array
 
 Return JSON only, no explanation, no markdown:

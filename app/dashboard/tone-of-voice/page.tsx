@@ -56,6 +56,7 @@ interface NegativeAlertRow {
   raw_response:     string | null;
   competitors_mentioned: string[];
   source_attribution: unknown[] | null;
+  cited_sources: string[] | null;
 }
 
 // brand_name → SentimentCounts
@@ -97,6 +98,24 @@ function barPcts(c: SentimentCounts): { pos: number; neu: number; neg: number } 
 }
 function formatAlertDate(iso: string): string {
   return new Date(iso).toLocaleDateString("en-GB", { day: "numeric", month: "short" });
+}
+
+/** Merge cited_sources (string[]) and source_attribution (object[]/string[]) into
+ *  a deduplicated list of { url, domain }, max 5. Dedup by hostname. */
+function mergeSourceUrls(citedSources?: string[] | null, sourceAttribution?: unknown[] | null): { url: string; domain: string }[] {
+  const seen = new Map<string, string>();
+  for (const url of citedSources ?? []) {
+    if (!url) continue;
+    try { const d = new URL(url).hostname.replace("www.", ""); if (!seen.has(d)) seen.set(d, url); }
+    catch { if (!seen.has(url)) seen.set(url, url); }
+  }
+  for (const src of sourceAttribution ?? []) {
+    const raw = typeof src === "string" ? src : (src as Record<string, unknown>)?.url;
+    if (!raw || typeof raw !== "string") continue;
+    try { const d = new URL(raw).hostname.replace("www.", ""); if (!seen.has(d)) seen.set(d, raw); }
+    catch { if (!seen.has(raw)) seen.set(raw, raw); }
+  }
+  return Array.from(seen.entries()).slice(0, 5).map(([domain, url]) => ({ url, domain }));
 }
 
 // ── Sub-components ─────────────────────────────────────────────────────────────
@@ -460,7 +479,7 @@ function NegativeAlerts({ clientId, brandName }: { clientId: string | null; bran
           created_at,
           tracking_run_id,
           queries(text),
-          tracking_runs(raw_response, competitors_mentioned, source_attribution)
+          tracking_runs(raw_response, competitors_mentioned, source_attribution, cited_sources)
         `)
         .eq("client_id", clientId)
         .eq("is_tracked_brand", true)
@@ -486,6 +505,7 @@ function NegativeAlerts({ clientId, brandName }: { clientId: string | null; bran
         raw_response:         (r.tracking_runs as { raw_response: string | null } | null)?.raw_response ?? null,
         competitors_mentioned:(r.tracking_runs as { competitors_mentioned: string[] | null } | null)?.competitors_mentioned ?? [],
         source_attribution:   (r.tracking_runs as { source_attribution: unknown[] | null } | null)?.source_attribution ?? null,
+        cited_sources:        (r.tracking_runs as { raw_response: string | null; competitors_mentioned: string[] | null; cited_sources: string[] | null } | null)?.cited_sources ?? null,
       }));
 
       setAlerts(rows);
@@ -549,6 +569,22 @@ function NegativeAlerts({ clientId, brandName }: { clientId: string | null; bran
                     View Response →
                   </span>
                 </div>
+                {(() => {
+                  const sources = mergeSourceUrls(alert.cited_sources, alert.source_attribution);
+                  if (sources.length === 0) return null;
+                  return (
+                    <div className="mt-3">
+                      <p className="text-[9px] font-bold tracking-[2px] uppercase text-[#6B7280] mt-4 mb-1.5">Sources</p>
+                      <div className="flex flex-col gap-0.5">
+                        {sources.map((s, i) => (
+                          <a key={i} href={s.url} target="_blank" rel="noopener noreferrer" className="text-[11px] text-[#00B4D8] hover:underline truncate block">
+                            {s.domain}
+                          </a>
+                        ))}
+                      </div>
+                    </div>
+                  );
+                })()}
               </button>
             </li>
           ))}
@@ -595,7 +631,7 @@ function ToneOfVoiceInner() {
       const [mentionsResult, competitorsResult] = await Promise.all([
         supabase
           .from("response_brand_mentions")
-          .select("id, brand_name, is_tracked_brand, mention_sentiment, model, mention_context, tracking_run_id, query_intent, created_at, tracking_runs(raw_response, query_id, competitors_mentioned, source_attribution, queries(text))")
+          .select("id, brand_name, is_tracked_brand, mention_sentiment, model, mention_context, tracking_run_id, query_intent, created_at, tracking_runs(raw_response, query_id, competitors_mentioned, source_attribution, cited_sources, queries(text))")
           .eq("client_id", clientId)
           .eq("query_intent", "comparative")
           .not("mention_sentiment", "is", null),
@@ -756,6 +792,7 @@ function ToneOfVoiceInner() {
           competitorsMentioned: ((m.tracking_runs as { competitors_mentioned?: string[] | null } | null)?.competitors_mentioned ?? []),
           mentionContext: m.mention_context,
           sourceAttribution: (m.tracking_runs as { source_attribution?: unknown[] | null } | null)?.source_attribution ?? null,
+          citedSources: (m.tracking_runs as { cited_sources?: string[] | null } | null)?.cited_sources ?? null,
         }));
 
         return (
@@ -797,6 +834,7 @@ function ToneOfVoiceInner() {
           competitorsMentioned: ((m.tracking_runs as { competitors_mentioned?: string[] | null } | null)?.competitors_mentioned ?? []),
           mentionContext: m.mention_context,
           sourceAttribution: (m.tracking_runs as { source_attribution?: unknown[] | null } | null)?.source_attribution ?? null,
+          citedSources: (m.tracking_runs as { cited_sources?: string[] | null } | null)?.cited_sources ?? null,
         }));
 
         return (
