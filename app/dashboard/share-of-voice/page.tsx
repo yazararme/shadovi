@@ -97,8 +97,10 @@ function groupRunsByQuery(
       });
     }
     const g = map.get(run.query_id)!;
+    const hasComps = (run.competitors_mentioned ?? []).length > 0;
     if (!g.models.includes(run.model)) {
-      g.models.push(run.model);
+      // Only include model in the badge list if its run actually mentions competitors
+      if (hasComps) g.models.push(run.model);
       g.allRuns.push(run);
     }
     for (const c of run.competitors_mentioned ?? []) {
