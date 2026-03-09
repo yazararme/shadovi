@@ -4,9 +4,10 @@ import { useEffect, useState, Suspense } from "react";
 import { useSearchParams } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
 import { NarrativePathway } from "@/components/dashboard/NarrativePathway";
-import { ResponseDrawer, type RunOption } from "@/components/dashboard/ResponseDrawer";
+import { ResponseDrawer, MarkdownBody, type RunOption } from "@/components/dashboard/ResponseDrawer";
 import { Skeleton } from "@/components/ui/skeleton";
-import { ChevronDown, ChevronUp } from "lucide-react";
+import { X, ArrowLeft } from "lucide-react";
+import Link from "next/link";
 import type { Client, TrackingRun, LLMModel, QueryIntent, GapCluster } from "@/types";
 
 type EnrichedRun = TrackingRun & {
@@ -62,6 +63,21 @@ interface DrawerState {
   runs: EnrichedRun[];
   queryText: string;
 }
+
+type ClusterDrawerState = {
+  type: "cluster";
+  cluster: GapCluster;
+  groupedQueries: GroupedQueryRun[];
+};
+
+type NarrativeResponseDrawerState = {
+  type: "response";
+  runs: EnrichedRun[];
+  queryText: string;
+  back: ClusterDrawerState;
+};
+
+type ClusterDrawerUnion = ClusterDrawerState | NarrativeResponseDrawerState | null;
 
 /** One card per unique query — aggregates all model runs for that query */
 interface GroupedQueryRun {
@@ -144,74 +160,249 @@ function ClusterGridCard({
   cluster,
   displaced,
   open,
-  isActive,
-  onClick,
+  onSeeMore,
 }: {
   cluster: GapCluster;
   displaced: number;
   open: number;
-  isActive: boolean;
-  onClick: () => void;
+  onSeeMore: () => void;
 }) {
   return (
     <button
-      onClick={onClick}
-      className={`w-full text-left p-4 rounded-xl border bg-white transition-all ${
-        isActive
-          ? "border-[#0D0437] shadow-md ring-1 ring-[#0D0437]/10"
-          : "border-[#E2E8F0] hover:border-[#C7CEE0] hover:shadow-sm"
-      }`}
+      type="button"
+      onClick={onSeeMore}
+      className="w-full text-left p-4 rounded-xl border border-[#E2E8F0] bg-white cursor-pointer hover:shadow-md hover:border-[#0D0437]/20 transition-all duration-150 flex flex-col gap-2.5"
     >
-      <div className="space-y-2.5">
-        <div className="flex items-start justify-between gap-2">
-          <p className="text-[13px] font-bold text-[#0D0437] leading-snug">
-            {cluster.cluster_name}
-          </p>
-          {isActive ? (
-            <ChevronUp className="h-3.5 w-3.5 text-[#9CA3AF] shrink-0 mt-0.5" />
+      <p className="text-[13px] font-bold text-[#0D0437] leading-snug">
+        {cluster.cluster_name}
+      </p>
+
+      <p className="text-[12px] text-[#6B7280]">
+        {cluster.query_count} {cluster.query_count === 1 ? "query" : "queries"}
+      </p>
+
+      {(displaced > 0 || open > 0) && (
+        <div className="flex gap-1.5 flex-wrap">
+          {displaced > 0 && (
+            <span className="inline-flex items-center rounded border px-1.5 py-0.5 text-[10px] font-bold tracking-wide uppercase bg-[rgba(255,75,110,0.10)] text-[#FF4B6E] border-[rgba(255,75,110,0.25)]">
+              Displaced {displaced}
+            </span>
+          )}
+          {open > 0 && (
+            <span className="inline-flex items-center rounded border px-1.5 py-0.5 text-[10px] font-bold tracking-wide uppercase bg-[rgba(0,175,150,0.10)] text-[#00AF96] border-[rgba(0,175,150,0.25)]">
+              Open {open}
+            </span>
+          )}
+        </div>
+      )}
+
+      {(cluster.competitors_present ?? []).length > 0 && (
+        <div className="flex gap-1 flex-wrap">
+          {cluster.competitors_present.slice(0, 3).map((c) => (
+            <span
+              key={c}
+              className="px-1.5 py-0.5 rounded text-[10px] font-medium bg-[#F4F6F9] text-[#6B7280] border border-[#E2E8F0]"
+            >
+              {c}
+            </span>
+          ))}
+          {cluster.competitors_present.length > 3 && (
+            <span className="text-[10px] text-[#9CA3AF] self-center">
+              +{cluster.competitors_present.length - 3} more
+            </span>
+          )}
+        </div>
+      )}
+
+      {/* See More CTA — visual only, card click handles action */}
+      <span className="mt-auto pt-2 border-t border-[#F1F5F9] text-[9px] font-bold uppercase tracking-widest text-[#9CA3AF] hover:text-[#0D0437] transition-colors flex items-center gap-1 w-fit">
+        SEE MORE →
+      </span>
+    </button>
+  );
+}
+
+// ─── Cluster Drawer ─────────────────────────────────────────────────────────────
+
+/** Keep only the most recent run per model (by ran_at). */
+function dedupeRunsByModel(runs: EnrichedRun[]): EnrichedRun[] {
+  const seen = new Map<string, EnrichedRun>();
+  for (const run of runs) {
+    const existing = seen.get(run.model);
+    if (!existing || run.ran_at > existing.ran_at) {
+      seen.set(run.model, run);
+    }
+  }
+  return Array.from(seen.values());
+}
+
+function NarrativeClusterDrawer({
+  state,
+  brandName,
+  clientId,
+  roadmapHref,
+  onClose,
+  onStateChange,
+}: {
+  state: ClusterDrawerState | NarrativeResponseDrawerState;
+  brandName: string;
+  clientId: string;
+  roadmapHref: string;
+  onClose: () => void;
+  onStateChange: (s: ClusterDrawerUnion) => void;
+}) {
+  const [isOpen, setIsOpen] = useState(false);
+
+  useEffect(() => {
+    const t = setTimeout(() => setIsOpen(true), 10);
+    return () => clearTimeout(t);
+  }, []);
+
+  useEffect(() => {
+    function onKey(e: KeyboardEvent) { if (e.key === "Escape") handleClose(); }
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  function handleClose() {
+    setIsOpen(false);
+    setTimeout(onClose, 300);
+  }
+
+  return (
+    <>
+      {/* Backdrop */}
+      <div
+        className={`fixed inset-0 z-40 bg-black transition-opacity duration-300 ease-in-out ${
+          isOpen ? "opacity-30" : "opacity-0"
+        }`}
+        onClick={handleClose}
+        aria-hidden
+      />
+
+      {/* Panel */}
+      <div
+        role="dialog"
+        aria-modal="true"
+        className={`fixed inset-y-0 right-0 z-50 flex flex-col w-[520px] max-w-[96vw] bg-white shadow-xl
+          transition-transform duration-300 ease-in-out
+          ${isOpen ? "translate-x-0" : "translate-x-full"}`}
+      >
+        {/* Header */}
+        <div className="px-5 py-4 border-b border-[#E2E8F0] flex items-center justify-between shrink-0">
+          <div className="min-w-0">
+            {state.type === "response" ? (
+              <>
+                <button
+                  type="button"
+                  onClick={() => onStateChange(state.back)}
+                  className="flex items-center gap-1 text-[11px] font-medium text-[#6B7280] hover:text-[#0D0437] transition-colors mb-1"
+                >
+                  <ArrowLeft className="h-3 w-3" />
+                  Back
+                </button>
+                <p className="text-[13px] text-[#6B7280] truncate" title={state.queryText}>
+                  &ldquo;{state.queryText}&rdquo;
+                </p>
+              </>
+            ) : (
+              <>
+                <p className="text-[14px] font-bold text-[#0D0437]">{state.cluster.cluster_name}</p>
+                <p className="font-mono text-[11px] text-[#9CA3AF] mt-0.5">
+                  {state.groupedQueries.length} gap {state.groupedQueries.length === 1 ? "query" : "queries"}
+                </p>
+              </>
+            )}
+          </div>
+          <button
+            type="button"
+            onClick={handleClose}
+            className="h-7 w-7 flex items-center justify-center rounded hover:bg-[#F4F6F9] text-[#6B7280] hover:text-[#0D0437] transition-colors shrink-0"
+            aria-label="Close"
+          >
+            <X className="h-4 w-4" />
+          </button>
+        </div>
+
+        {/* Body */}
+        <div className="flex-1 overflow-y-auto px-4 py-3 min-h-0">
+          {state.type === "cluster" ? (
+            state.groupedQueries.length > 0 ? (
+              <div className="space-y-2.5">
+                {state.groupedQueries.map((g) => (
+                  <NarrativePathway
+                    key={g.queryId}
+                    queryText={g.queryText}
+                    models={g.models}
+                    intent={g.queryIntent}
+                    citedSources={g.citedSources}
+                    competitorsMentioned={g.competitorsMentioned}
+                    clientId={clientId}
+                    onViewResponse={() =>
+                      onStateChange({
+                        type: "response",
+                        runs: dedupeRunsByModel(g.allRuns),
+                        queryText: g.queryText,
+                        back: state,
+                      })
+                    }
+                  />
+                ))}
+              </div>
+            ) : (
+              <p className="text-[12px] text-[#9CA3AF] italic py-4">
+                No run data available for these queries yet.
+              </p>
+            )
           ) : (
-            <ChevronDown className="h-3.5 w-3.5 text-[#9CA3AF] shrink-0 mt-0.5" />
+            /* Response view */
+            <div className="space-y-4">
+              {state.runs.length > 1 && (
+                <div className="flex gap-1.5 flex-wrap">
+                  {state.runs.map((r) => (
+                    <span
+                      key={r.model}
+                      className={`text-[9px] font-bold tracking-[1.5px] uppercase px-2 py-0.5 rounded border ${MODEL_COLORS[r.model] ?? "bg-[#F4F6F9] text-[#6B7280] border-[#E2E8F0]"}`}
+                    >
+                      {MODEL_LABELS[r.model]}
+                    </span>
+                  ))}
+                </div>
+              )}
+              {state.runs.map((r) => (
+                <div key={r.model}>
+                  <p className="text-[10px] font-bold uppercase tracking-[1.5px] text-[#9CA3AF] mb-2">
+                    {state.runs.length > 1 ? MODEL_LABELS[r.model] : "Full Response"}
+                  </p>
+                  <div className="bg-[#F9FAFB] rounded-lg p-4 max-h-[300px] overflow-y-auto">
+                    {r.raw_response ? (
+                      <MarkdownBody
+                        text={r.raw_response}
+                        brandName={brandName}
+                        competitorNames={r.competitors_mentioned ?? []}
+                      />
+                    ) : (
+                      <p className="text-[13px] text-[#6B7280] italic">No response recorded.</p>
+                    )}
+                  </div>
+                </div>
+              ))}
+            </div>
           )}
         </div>
 
-        <p className="text-[12px] text-[#6B7280]">
-          {cluster.query_count} {cluster.query_count === 1 ? "query" : "queries"}
-        </p>
-
-        {(displaced > 0 || open > 0) && (
-          <div className="flex gap-1.5 flex-wrap">
-            {displaced > 0 && (
-              <span className="inline-flex items-center rounded border px-1.5 py-0.5 text-[10px] font-bold tracking-wide uppercase bg-[rgba(255,75,110,0.10)] text-[#FF4B6E] border-[rgba(255,75,110,0.25)]">
-                Displaced {displaced}
-              </span>
-            )}
-            {open > 0 && (
-              <span className="inline-flex items-center rounded border px-1.5 py-0.5 text-[10px] font-bold tracking-wide uppercase bg-[rgba(0,175,150,0.10)] text-[#00AF96] border-[rgba(0,175,150,0.25)]">
-                Open {open}
-              </span>
-            )}
-          </div>
-        )}
-
-        {(cluster.competitors_present ?? []).length > 0 && (
-          <div className="flex gap-1 flex-wrap">
-            {cluster.competitors_present.slice(0, 3).map((c) => (
-              <span
-                key={c}
-                className="px-1.5 py-0.5 rounded text-[10px] font-medium bg-[#F4F6F9] text-[#6B7280] border border-[#E2E8F0]"
-              >
-                {c}
-              </span>
-            ))}
-            {cluster.competitors_present.length > 3 && (
-              <span className="text-[10px] text-[#9CA3AF] self-center">
-                +{cluster.competitors_present.length - 3} more
-              </span>
-            )}
-          </div>
-        )}
+        {/* Footer */}
+        <div className="border-t border-[#E2E8F0] bg-white px-5 py-4 shrink-0">
+          <Link
+            href={roadmapHref}
+            className="block w-full text-center bg-[#FF4B6E] hover:bg-[#e8435f] text-white text-[13px] font-medium rounded-lg py-2.5 transition-colors"
+          >
+            View Recommendations →
+          </Link>
+        </div>
       </div>
-    </button>
+    </>
   );
 }
 
@@ -236,8 +427,7 @@ function NarrativeInner() {
   const [brandMentionedQM, setBrandMentionedQM] = useState<Set<string>>(new Set());
   const [loading, setLoading] = useState(true);
   const [drawer, setDrawer] = useState<DrawerState | null>(null);
-  // Which cluster card is currently expanded (null = all collapsed)
-  const [activeClusterId, setActiveClusterId] = useState<string | null>(null);
+  const [clusterDrawer, setClusterDrawer] = useState<ClusterDrawerUnion>(null);
 
   useEffect(() => {
     loadData();
@@ -436,19 +626,19 @@ function NarrativeInner() {
     });
   }
 
-  // Active cluster — data for the full-width expansion panel
-  const activeCluster = activeClusterId
-    ? clusters.find((c) => c.id === activeClusterId) ?? null
-    : null;
-  const activeClusterGrouped = activeCluster
-    ? (() => {
-        const memberIds = clusterQueryMap.get(activeCluster.id) ?? new Set();
-        const cRuns = clusterSourceRuns.filter(
-          (r) => memberIds.has(r.query_id) && r.brand_mentioned === false
-        );
-        return groupRunsByQuery(cRuns, brandMentionedQM);
-      })()
-    : [];
+  // Helper: compute grouped gap queries for a cluster (used by drawer)
+  function getClusterGroupedQueries(clusterId: string): GroupedQueryRun[] {
+    const memberIds = clusterQueryMap.get(clusterId) ?? new Set();
+    const cRuns = clusterSourceRuns.filter(
+      (r) => memberIds.has(r.query_id) && r.brand_mentioned === false
+    );
+    return groupRunsByQuery(cRuns, brandMentionedQM);
+  }
+
+  // Simple roadmap link for this page (no recommendations data available here)
+  function getClusterRoadmapHref(): string {
+    return `/dashboard/roadmap${clientIdParam ? `?client=${clientIdParam}` : ""}`;
+  }
 
   // Source breakdown
   const domainStats: Record<string, { type: string; count: number }> = {};
@@ -544,53 +734,17 @@ function NarrativeInner() {
                     cluster={cluster}
                     displaced={stats.displaced}
                     open={stats.open}
-                    isActive={activeClusterId === cluster.id}
-                    onClick={() =>
-                      setActiveClusterId((prev) =>
-                        prev === cluster.id ? null : cluster.id
-                      )
-                    }
+                    onSeeMore={() => {
+                      setClusterDrawer({
+                        type: "cluster",
+                        cluster,
+                        groupedQueries: getClusterGroupedQueries(cluster.id),
+                      });
+                    }}
                   />
                 );
               })}
             </div>
-
-            {/* Full-width expansion panel — shows the selected cluster's gap queries */}
-            {activeCluster && (
-              <div className="border border-[#0D0437]/15 rounded-xl bg-white overflow-hidden shadow-sm">
-                <div className="px-5 py-3 border-b border-[#E2E8F0] bg-[#F4F6F9] flex items-center justify-between">
-                  <p className="text-[12px] font-bold text-[#0D0437]">
-                    {activeCluster.cluster_name}
-                  </p>
-                  <span className="font-mono text-[11px] text-[#9CA3AF]">
-                    {activeClusterGrouped.length}{" "}
-                    {activeClusterGrouped.length === 1 ? "gap query" : "gap queries"}
-                  </span>
-                </div>
-                {activeClusterGrouped.length > 0 ? (
-                  <div className="p-4 space-y-2.5">
-                    {activeClusterGrouped.map((g) => (
-                      <NarrativePathway
-                        key={g.queryId}
-                        queryText={g.queryText}
-                        models={g.models}
-                        intent={g.queryIntent}
-                        citedSources={g.citedSources}
-                        competitorsMentioned={g.competitorsMentioned}
-                        clientId={client.id}
-                        onViewResponse={() =>
-                          setDrawer({ runs: g.allRuns, queryText: g.queryText })
-                        }
-                      />
-                    ))}
-                  </div>
-                ) : (
-                  <p className="px-5 py-4 text-[12px] text-[#9CA3AF] italic">
-                    No run data available for these queries.
-                  </p>
-                )}
-              </div>
-            )}
           </div>
         )}
       </section>
@@ -720,6 +874,18 @@ function NarrativeInner() {
             </table>
           </div>
         </section>
+      )}
+
+      {/* Cluster drawer */}
+      {clusterDrawer && (
+        <NarrativeClusterDrawer
+          state={clusterDrawer}
+          brandName={brandLabel}
+          clientId={client.id}
+          roadmapHref={getClusterRoadmapHref()}
+          onClose={() => setClusterDrawer(null)}
+          onStateChange={setClusterDrawer}
+        />
       )}
 
       {/* Response drawer */}
