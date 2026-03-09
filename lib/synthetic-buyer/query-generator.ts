@@ -52,32 +52,41 @@ function buildGenerationPrompt(ctx: ClientContext, brandFacts?: BrandFact[], cou
     .join("\n\n");
 
   // Always include all bait facts (is_true=false) — they are critical for BVI scoring.
-  // Fill remaining slots up to 8 with real facts. Bait facts come first so slice never drops them.
+  // Fill remaining slots up to valCount with real facts. Bait facts come first so slice never drops them.
   const cappedFacts = brandFacts
     ? (() => {
         const bait = brandFacts.filter((f) => !f.is_true);
         const real = brandFacts.filter((f) => f.is_true);
-        return [...bait, ...real].slice(0, Math.max(8, bait.length));
+        return [...bait, ...real].slice(0, Math.max(valCount, bait.length));
       })()
     : undefined;
 
-  // When brand facts are provided, the validation layer generates one query per fact
-  // so scoring can be anchored to a specific known claim rather than guessing the mapping.
-  const validationInstruction = cappedFacts && cappedFacts.length > 0
-    ? `VALIDATION (${cappedFacts.length} queries — one per brand fact below) — Late funnel. Generate exactly one query per fact that a buyer would realistically ask to evaluate whether the brand has this capability or attribute.
-Map to funnel_stage: decision
+  // When brand facts are provided, anchor validation queries to specific claims.
+  // If the user requests more validation queries than facts available, generate
+  // fact-anchored queries first, then fill the remainder with generic criteria queries.
+  const factsToUse = cappedFacts && cappedFacts.length > 0
+    ? cappedFacts.slice(0, valCount)  // never exceed requested count
+    : undefined;
+  const extraGenericValidation = factsToUse
+    ? Math.max(0, valCount - factsToUse.length)
+    : 0;
 
-Brand facts to test (include the fact_id in each validation query's output):
-${cappedFacts.map((f) => `- fact_id: "${f.id}" | claim: "${f.claim}" | category: ${f.category}`).join("\n")}
+  let validationInstruction: string;
+  if (factsToUse && factsToUse.length > 0) {
+    const factLines = factsToUse.map((f) => `- fact_id: "${f.id}" | claim: "${f.claim}" | category: ${f.category}`).join("\n");
+    validationInstruction = `VALIDATION (${valCount} queries total) — Late funnel.\n` +
+      `Generate exactly one query per brand fact below (${factsToUse.length} fact-anchored queries).` +
+      (extraGenericValidation > 0
+        ? ` Then generate ${extraGenericValidation} additional generic validation queries (criteria-specific: "Is [Brand] good for [specific use case] if we have [constraint]?"). These extra queries should NOT include a fact_id.`
+        : "") +
+      `\nMap to funnel_stage: decision\n\n` +
+      `Brand facts to test (include the fact_id in each fact-anchored query's output):\n${factLines}\n\n` +
+      `IMPORTANT: For each fact-anchored validation query, include "fact_id": "<the fact_id from above>" in the JSON object.`;
+  } else {
+    validationInstruction = `VALIDATION (${valCount} queries) — Late funnel. Buyer is evaluating fit.\nCriteria-specific: "Is [Brand] good for [specific use case] if we have [constraint]?"\nMap to funnel_stage: decision`;
+  }
 
-IMPORTANT: For each validation query, include "fact_id": "<the fact_id from above>" in the JSON object.`
-    : `VALIDATION (${valCount} queries) — Late funnel. Buyer is evaluating fit.
-Criteria-specific: "Is [Brand] good for [specific use case] if we have [constraint]?"
-Map to funnel_stage: decision`;
-
-  const totalQueries = cappedFacts && cappedFacts.length > 0
-    ? paCount + catCount + compCount + cappedFacts.length
-    : paCount + catCount + compCount + valCount;
+  const totalQueries = paCount + catCount + compCount + valCount;
 
   return `You are generating a strategic AEO query portfolio for the brand "${brandDNA.brand_name}".
 
@@ -156,7 +165,8 @@ type GeneratedQuery = Omit<Query, "id" | "client_id" | "created_at" | "status" |
 
 function ensureMinBaitQueries(
   queries: GeneratedQuery[],
-  factLookup: Map<string, BrandFact>
+  factLookup: Map<string, BrandFact>,
+  validationCap: number = DEFAULT_PER_INTENT
 ): GeneratedQuery[] {
   const baitCount = queries.filter((q) => q.is_bait).length;
   if (baitCount >= MIN_BAIT_QUERIES) return queries;
@@ -197,8 +207,8 @@ function ensureMinBaitQueries(
   const validation = queries.filter((q) => q.intent === "validation");
   const nonValidation = queries.filter((q) => q.intent !== "validation");
 
-  if (validation.length + syntheticBait.length <= 8) {
-    // Under the 8-per-intent cap — just append
+  if (validation.length + syntheticBait.length <= validationCap) {
+    // Under the per-intent cap — just append
     return [...nonValidation, ...validation, ...syntheticBait];
   }
 
@@ -452,7 +462,7 @@ export async function calibrateQueries(
 
   // Only enforce bait minimum when validation intent is being regenerated
   if (intents.includes("validation")) {
-    return ensureMinBaitQueries(result, factLookup);
+    return ensureMinBaitQueries(result, factLookup, 8);
   }
   return result;
 }
@@ -601,5 +611,6 @@ export async function generateQueries(
   // Guarantee minimum bait queries — if the LLM omitted fact_ids or the critic
   // broke index alignment, bait designation is lost. This injects deterministic
   // bait queries from is_true=false facts so every generation has hallucination detection.
-  return ensureMinBaitQueries(result, factLookup);
+  const valCap = countsPerIntent?.validation ?? DEFAULT_PER_INTENT;
+  return ensureMinBaitQueries(result, factLookup, valCap);
 }
