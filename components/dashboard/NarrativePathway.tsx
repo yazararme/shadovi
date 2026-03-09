@@ -1,8 +1,8 @@
 "use client";
 
-import { useState } from "react";
 import { cn } from "@/lib/utils";
 import type { LLMModel, QueryIntent, CitedSource } from "@/types";
+import { SourcePills } from "@/components/dashboard/SourcePills";
 
 interface NarrativePathwayProps {
   queryText: string;
@@ -40,29 +40,6 @@ const INTENT_LABELS: Record<QueryIntent, string> = {
 
 import { ChevronRight } from "lucide-react";
 
-// Favicon with Google S2 fallback and initial-letter last resort
-function FaviconImg({ domain }: { domain: string }) {
-  const [errored, setErrored] = useState(false);
-  const src = `https://www.google.com/s2/favicons?domain=${domain}&sz=16`;
-  if (errored) {
-    return (
-      <div className="w-4 h-4 rounded-sm bg-[#E2E8F0] flex items-center justify-center shrink-0">
-        <span className="text-[8px] font-bold text-[#6B7280] uppercase">{domain[0]}</span>
-      </div>
-    );
-  }
-  return (
-    // eslint-disable-next-line @next/next/no-img-element
-    <img
-      src={src}
-      alt={domain}
-      width={16}
-      height={16}
-      className="w-4 h-4 rounded-sm shrink-0"
-      onError={() => setErrored(true)}
-    />
-  );
-}
 
 export function NarrativePathway({
   queryText,
@@ -129,17 +106,11 @@ export function NarrativePathway({
           )}
         </div>
 
-        {/* Source — favicon icons for each cited source, lined up horizontally */}
+        {/* Source — favicon pill chips for each cited source */}
         <div className="flex items-center gap-3">
           <span className="text-xs text-muted-foreground w-24 shrink-0">source</span>
           {citedSources.length > 0 ? (
-            <div className="flex items-center gap-1.5">
-              {citedSources.map((s, idx) => (
-                <div key={`${s.url ?? "unknown"}-${idx}`} title={s.domain} className="shrink-0">
-                  <FaviconImg domain={s.domain} />
-                </div>
-              ))}
-            </div>
+            <SourcePills sources={citedSources} label={false} />
           ) : (
             <span className="text-xs text-muted-foreground italic">not available</span>
           )}

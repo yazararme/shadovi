@@ -3,6 +3,7 @@
 import React, { useEffect, useState } from "react";
 import { X, ChevronDown, ChevronUp, Download } from "lucide-react";
 import { MarkdownBody } from "@/components/dashboard/ResponseDrawer";
+import { SourcePills } from "@/components/dashboard/SourcePills";
 import type { LLMModel, QueryIntent } from "@/types";
 
 // ── Types ────────────────────────────────────────────────────────────────────
@@ -371,14 +372,7 @@ export function MetricDetailDrawer({
                         if (sources.length === 0) return null;
                         return (
                           <div className="mt-3">
-                            <p className="text-[9px] font-bold tracking-[2px] uppercase text-[#6B7280] mb-1.5">Sources</p>
-                            <div className="flex flex-col gap-0.5">
-                              {sources.map((s, i) => (
-                                <a key={i} href={s.url} target="_blank" rel="noopener noreferrer" className="text-[11px] text-[#00B4D8] hover:underline truncate block">
-                                  {s.domain}
-                                </a>
-                              ))}
-                            </div>
+                            <SourcePills sources={sources} />
                           </div>
                         );
                       })()}

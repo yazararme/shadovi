@@ -6,6 +6,7 @@ import { useClientContext } from "@/context/ClientContext";
 import { Skeleton } from "@/components/ui/skeleton";
 import { ResponseDrawer, type RunOption } from "@/components/dashboard/ResponseDrawer";
 import { MetricDetailDrawer } from "@/components/dashboard/MetricDetailDrawer";
+import { SourcePills } from "@/components/dashboard/SourcePills";
 import type { LLMModel } from "@/types";
 import {
   BarChart, Bar, XAxis, YAxis, Tooltip,
@@ -558,14 +559,7 @@ function NegativeAlerts({ clientId, brandName }: { clientId: string | null; bran
                   if (sources.length === 0) return null;
                   return (
                     <div className="mt-3">
-                      <p className="text-[9px] font-bold tracking-[2px] uppercase text-[#6B7280] mt-4 mb-1.5">Sources</p>
-                      <div className="flex flex-col gap-0.5">
-                        {sources.map((s, i) => (
-                          <a key={i} href={s.url} target="_blank" rel="noopener noreferrer" className="text-[11px] text-[#00B4D8] hover:underline truncate block">
-                            {s.domain}
-                          </a>
-                        ))}
-                      </div>
+                      <SourcePills sources={sources} />
                     </div>
                   );
                 })()}
