@@ -266,8 +266,6 @@ function CompetitiveFavorability({
   ownBrandName: string | null;
   loading: boolean;
 }) {
-  const [showAll, setShowAll] = useState(false);
-
   if (loading) return <Skeleton className="h-56 w-full rounded-xl" />;
 
   if (!brandMap || !ownBrandName) {
@@ -301,11 +299,9 @@ function CompetitiveFavorability({
     );
   }
 
-  const TOP_N = 3;
-  const visibleCompetitors = showAll ? competitors : competitors.slice(0, TOP_N);
   const rows = [
     ...(ownEntry ? [{ name: ownBrandName, counts: ownEntry }] : []),
-    ...visibleCompetitors.map(([name, counts]) => ({ name, counts })),
+    ...competitors.map(([name, counts]) => ({ name, counts })),
   ];
 
   const chartData = rows.map(({ name, counts }) => {
@@ -318,18 +314,6 @@ function CompetitiveFavorability({
 
   return (
     <div className="border border-[#E2E8F0] rounded-xl bg-white p-6">
-      {/* Toggle lives at the top-right so it's always reachable without scrolling */}
-      {competitors.length > TOP_N && (
-        <div className="flex justify-end mb-3">
-          <button
-            type="button"
-            onClick={() => setShowAll((v) => !v)}
-            className="text-[11px] font-bold text-[#9CA3AF] hover:text-[#0D0437] transition-colors flex items-center gap-1"
-          >
-            {showAll ? `↑ Show top ${TOP_N} only` : `Show all ${competitors.length} →`}
-          </button>
-        </div>
-      )}
       <ResponsiveContainer width="100%" height={chartHeight}>
         <BarChart layout="vertical" data={chartData}
           margin={{ top: 0, right: 0, bottom: 0, left: 0 }} barSize={18}>
