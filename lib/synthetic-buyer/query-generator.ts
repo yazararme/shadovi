@@ -28,13 +28,26 @@ const QueryArraySchema = z.array(QuerySchema);
 // Default per-intent count when no override is provided (10 per intent = 40 total).
 const DEFAULT_PER_INTENT = 10;
 
+// LLMs (especially Haiku) often under-produce when asked for large per-intent counts.
+// Over-request by this factor in the prompt; the per-intent cap in generateQueries
+// trims to the exact user-requested counts, keeping the highest-scored queries.
+const PROMPT_BUFFER = 1.35;
+
 type CountsPerIntent = Partial<Record<QueryIntent, number>>;
 
 function buildGenerationPrompt(ctx: ClientContext, brandFacts?: BrandFact[], countsPerIntent?: CountsPerIntent): string {
+  // Actual counts the user requested — used for fact selection and per-intent cap.
   const paCount = countsPerIntent?.problem_aware ?? DEFAULT_PER_INTENT;
   const catCount = countsPerIntent?.category ?? DEFAULT_PER_INTENT;
   const compCount = countsPerIntent?.comparative ?? DEFAULT_PER_INTENT;
   const valCount = countsPerIntent?.validation ?? DEFAULT_PER_INTENT;
+
+  // Buffered counts for the prompt — ask the LLM for more than needed so the cap
+  // has enough candidates even if the LLM under-produces slightly.
+  const promptPa = Math.ceil(paCount * PROMPT_BUFFER);
+  const promptCat = Math.ceil(catCount * PROMPT_BUFFER);
+  const promptComp = Math.ceil(compCount * PROMPT_BUFFER);
+
   const { brandDNA, personas, competitors } = ctx;
 
   const competitorList = competitors
@@ -70,23 +83,28 @@ function buildGenerationPrompt(ctx: ClientContext, brandFacts?: BrandFact[], cou
   const extraGenericValidation = factsToUse
     ? Math.max(0, valCount - factsToUse.length)
     : 0;
+  // Buffer the generic portion of validation — fact-anchored queries are 1:1 with facts
+  const promptExtraGeneric = Math.ceil(extraGenericValidation * PROMPT_BUFFER);
+  const promptVal = factsToUse
+    ? factsToUse.length + promptExtraGeneric
+    : Math.ceil(valCount * PROMPT_BUFFER);
 
   let validationInstruction: string;
   if (factsToUse && factsToUse.length > 0) {
     const factLines = factsToUse.map((f) => `- fact_id: "${f.id}" | claim: "${f.claim}" | category: ${f.category}`).join("\n");
-    validationInstruction = `VALIDATION (${valCount} queries total) — Late funnel.\n` +
+    validationInstruction = `VALIDATION (${promptVal} queries total) — Late funnel.\n` +
       `Generate exactly one query per brand fact below (${factsToUse.length} fact-anchored queries).` +
-      (extraGenericValidation > 0
-        ? ` Then generate ${extraGenericValidation} additional generic validation queries (criteria-specific: "Is [Brand] good for [specific use case] if we have [constraint]?"). These extra queries should NOT include a fact_id.`
+      (promptExtraGeneric > 0
+        ? ` Then generate ${promptExtraGeneric} additional generic validation queries (criteria-specific: "Is [Brand] good for [specific use case] if we have [constraint]?"). These extra queries should NOT include a fact_id.`
         : "") +
       `\nMap to funnel_stage: decision\n\n` +
       `Brand facts to test (include the fact_id in each fact-anchored query's output):\n${factLines}\n\n` +
       `IMPORTANT: For each fact-anchored validation query, include "fact_id": "<the fact_id from above>" in the JSON object.`;
   } else {
-    validationInstruction = `VALIDATION (${valCount} queries) — Late funnel. Buyer is evaluating fit.\nCriteria-specific: "Is [Brand] good for [specific use case] if we have [constraint]?"\nMap to funnel_stage: decision`;
+    validationInstruction = `VALIDATION (${promptVal} queries) — Late funnel. Buyer is evaluating fit.\nCriteria-specific: "Is [Brand] good for [specific use case] if we have [constraint]?"\nMap to funnel_stage: decision`;
   }
 
-  const totalQueries = paCount + catCount + compCount + valCount;
+  const totalQueries = promptPa + promptCat + promptComp + promptVal;
 
   return `You are generating a strategic AEO query portfolio for the brand "${brandDNA.brand_name}".
 
@@ -107,13 +125,13 @@ ${competitorList || "None specified"}
 
 Generate queries across 4 intent layers:
 
-PROBLEM_AWARE (${paCount} queries) — Early funnel. Buyer has the pain, no brand awareness yet.
+PROBLEM_AWARE (${promptPa} queries) — Early funnel. Buyer has the pain, no brand awareness yet.
 Map to funnel_stage: awareness
 
-CATEGORY (${catCount} queries) — Mid funnel. Buyer is exploring solution categories.
+CATEGORY (${promptCat} queries) — Mid funnel. Buyer is exploring solution categories.
 Map to funnel_stage: consideration
 
-COMPARATIVE (${compCount} queries) — Mid-to-late funnel. Named brand comparisons.
+COMPARATIVE (${promptComp} queries) — Mid-to-late funnel. Named brand comparisons.
 Format: "[Brand] vs [Competitor] for [use case]" or direct comparisons.
 Use context_injection text for unrecognized competitors.
 Map to funnel_stage: consideration or decision
