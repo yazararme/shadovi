@@ -25,7 +25,16 @@ const QuerySchema = z.object({
 
 const QueryArraySchema = z.array(QuerySchema);
 
-function buildGenerationPrompt(ctx: ClientContext, brandFacts?: BrandFact[]): string {
+// Default per-intent count when no override is provided (10 per intent = 40 total).
+const DEFAULT_PER_INTENT = 10;
+
+type CountsPerIntent = Partial<Record<QueryIntent, number>>;
+
+function buildGenerationPrompt(ctx: ClientContext, brandFacts?: BrandFact[], countsPerIntent?: CountsPerIntent): string {
+  const paCount = countsPerIntent?.problem_aware ?? DEFAULT_PER_INTENT;
+  const catCount = countsPerIntent?.category ?? DEFAULT_PER_INTENT;
+  const compCount = countsPerIntent?.comparative ?? DEFAULT_PER_INTENT;
+  const valCount = countsPerIntent?.validation ?? DEFAULT_PER_INTENT;
   const { brandDNA, personas, competitors } = ctx;
 
   const competitorList = competitors
@@ -62,11 +71,13 @@ Brand facts to test (include the fact_id in each validation query's output):
 ${cappedFacts.map((f) => `- fact_id: "${f.id}" | claim: "${f.claim}" | category: ${f.category}`).join("\n")}
 
 IMPORTANT: For each validation query, include "fact_id": "<the fact_id from above>" in the JSON object.`
-    : `VALIDATION (8 queries) — Late funnel. Buyer is evaluating fit.
+    : `VALIDATION (${valCount} queries) — Late funnel. Buyer is evaluating fit.
 Criteria-specific: "Is [Brand] good for [specific use case] if we have [constraint]?"
 Map to funnel_stage: decision`;
 
-  const totalQueries = cappedFacts && cappedFacts.length > 0 ? 24 + cappedFacts.length : 32;
+  const totalQueries = cappedFacts && cappedFacts.length > 0
+    ? paCount + catCount + compCount + cappedFacts.length
+    : paCount + catCount + compCount + valCount;
 
   return `You are generating a strategic AEO query portfolio for the brand "${brandDNA.brand_name}".
 
@@ -87,13 +98,13 @@ ${competitorList || "None specified"}
 
 Generate queries across 4 intent layers:
 
-PROBLEM_AWARE (8 queries) — Early funnel. Buyer has the pain, no brand awareness yet.
+PROBLEM_AWARE (${paCount} queries) — Early funnel. Buyer has the pain, no brand awareness yet.
 Map to funnel_stage: awareness
 
-CATEGORY (8 queries) — Mid funnel. Buyer is exploring solution categories.
+CATEGORY (${catCount} queries) — Mid funnel. Buyer is exploring solution categories.
 Map to funnel_stage: consideration
 
-COMPARATIVE (8 queries) — Mid-to-late funnel. Named brand comparisons.
+COMPARATIVE (${compCount} queries) — Mid-to-late funnel. Named brand comparisons.
 Format: "[Brand] vs [Competitor] for [use case]" or direct comparisons.
 Use context_injection text for unrecognized competitors.
 Map to funnel_stage: consideration or decision
@@ -448,7 +459,8 @@ export async function calibrateQueries(
 
 export async function generateQueries(
   ctx: ClientContext,
-  brandFacts?: BrandFact[]
+  brandFacts?: BrandFact[],
+  countsPerIntent?: CountsPerIntent
 ): Promise<Omit<Query, "id" | "client_id" | "created_at" | "status" | "version_id">[]> {
   // Build a fact lookup so we can derive is_bait from the source fact at generation time.
   // This is more reliable than asking the LLM to classify bait — the LLM doesn't know
@@ -457,7 +469,7 @@ export async function generateQueries(
   brandFacts?.forEach((f) => factLookup.set(f.id, f));
 
   // Step A: Generate queries
-  const generationPrompt = buildGenerationPrompt(ctx, brandFacts);
+  const generationPrompt = buildGenerationPrompt(ctx, brandFacts, countsPerIntent);
   const rawGeneration = await callHaiku(generationPrompt);
   const cleanedGeneration = rawGeneration
     .replace(/^```(?:json)?\n?/i, "")
@@ -540,18 +552,23 @@ export async function generateQueries(
     fact_id: genResult.data[i]?.fact_id,
   }));
 
-  // Cap each intent at 8, keeping the highest-scoring queries.
-  // This enforces the 32-query hard limit (8 per intent) while preserving quality.
+  // Cap each intent at the requested count (default 10), keeping highest-scoring queries.
+  const intentCap: Record<string, number> = {
+    problem_aware: countsPerIntent?.problem_aware ?? DEFAULT_PER_INTENT,
+    category: countsPerIntent?.category ?? DEFAULT_PER_INTENT,
+    comparative: countsPerIntent?.comparative ?? DEFAULT_PER_INTENT,
+    validation: countsPerIntent?.validation ?? DEFAULT_PER_INTENT,
+  };
   const byIntent = new Map<string, typeof finalQueries>();
   for (const q of finalQueries) {
     const bucket = byIntent.get(q.intent) ?? [];
     bucket.push(q);
     byIntent.set(q.intent, bucket);
   }
-  const trimmed = Array.from(byIntent.values()).flatMap((bucket) =>
+  const trimmed = Array.from(byIntent.entries()).flatMap(([intent, bucket]) =>
     bucket
       .sort((a, b) => (b.relevance_score ?? 5) - (a.relevance_score ?? 5))
-      .slice(0, 8)
+      .slice(0, intentCap[intent] ?? DEFAULT_PER_INTENT)
   );
 
   const result = trimmed.map((q) => {

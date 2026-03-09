@@ -11,6 +11,7 @@ import {
   X, Plus, ChevronDown, Check, Sparkles, SendHorizonal, RefreshCw, Loader2,
 } from "lucide-react";
 import { toast } from "sonner";
+import { QueryVolumeModal } from "@/components/settings/QueryVolumeModal";
 import type {
   Client, Query, Persona, Competitor, BrandFact,
   BrandDNA, BrandFactCategory, RefineResponse, LLMModel, QueryIntent,
@@ -715,7 +716,7 @@ function ConfigCard({ icon, title, summary, expanded, onToggle, onEdit, children
 
 // ── Left panel ────────────────────────────────────────────────────────────────
 
-function LeftPanel({ queries, setQueries, activeIntent, setActiveIntent, clientId, calibrationInput, setCalibrationInput, isCalibrating, onCalibrate }: {
+function LeftPanel({ queries, setQueries, activeIntent, setActiveIntent, clientId, calibrationInput, setCalibrationInput, isCalibrating, onCalibrate, onOpenVolumeModal, portfolioUpdated }: {
   queries: Query[];
   setQueries: React.Dispatch<React.SetStateAction<Query[]>>;
   activeIntent: QueryIntent;
@@ -725,6 +726,8 @@ function LeftPanel({ queries, setQueries, activeIntent, setActiveIntent, clientI
   setCalibrationInput: React.Dispatch<React.SetStateAction<string>>;
   isCalibrating: boolean;
   onCalibrate: () => void;
+  onOpenVolumeModal: () => void;
+  portfolioUpdated: boolean;
 }) {
   const [addingQueryForIntent, setAddingQueryForIntent] = useState<QueryIntent | null>(null);
   const [newQueryText, setNewQueryText] = useState("");
@@ -803,6 +806,19 @@ function LeftPanel({ queries, setQueries, activeIntent, setActiveIntent, clientI
         <h2 className="font-exo2 font-bold text-xl text-[#0D0437] leading-tight">Query Portfolio</h2>
         <p className="text-sm text-muted-foreground mt-0.5">
           {totalActive} {totalActive === 1 ? "query" : "queries"} · {intentLayerCount} intent {intentLayerCount === 1 ? "layer" : "layers"}
+          {" · "}
+          {portfolioUpdated ? (
+            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-medium bg-[rgba(26,143,92,0.1)] text-[#1A8F5C]">
+              <Check className="h-3 w-3" /> Portfolio updated
+            </span>
+          ) : (
+            <button
+              onClick={onOpenVolumeModal}
+              className="text-[12px] text-[#7C3AED] underline decoration-dotted underline-offset-2 hover:text-[#6D28D9] transition-colors"
+            >
+              Adjust volume →
+            </button>
+          )}
         </p>
       </div>
       <div role="tablist" aria-label="Query intent filters" onKeyDown={handleTabKeyDown}
@@ -927,6 +943,11 @@ function SettingsInner() {
   // Calibration
   const [calibrationInput, setCalibrationInput] = useState("");
   const [isCalibrating, setIsCalibrating] = useState(false);
+
+  // Query volume modal
+  const [showVolumeModal, setShowVolumeModal] = useState(false);
+  const [portfolioUpdated, setPortfolioUpdated] = useState(false);
+  const portfolioUpdatedTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const fetchData = useCallback(async () => {
     if (!clientId) return;
@@ -1144,6 +1165,22 @@ function SettingsInner() {
   const activeQueryCount = queries.filter((q) => q.status === "active").length;
   const monthlyCost = calcMonthlyCost(activeQueryCount, selectedModels, selectedFrequency);
 
+  // Derive current per-intent counts from live query data for the volume modal
+  const activeQueries = queries.filter((q) => q.status === "active" || (q.status !== "removed" && q.status !== "inactive"));
+  const currentCounts: Record<QueryIntent, number> = {
+    problem_aware: activeQueries.filter((q) => q.intent === "problem_aware").length,
+    category: activeQueries.filter((q) => q.intent === "category").length,
+    comparative: activeQueries.filter((q) => q.intent === "comparative").length,
+    validation: activeQueries.filter((q) => q.intent === "validation").length,
+  };
+
+  function handleVolumeRegenerated(freshQueries: Query[]) {
+    setQueries(freshQueries);
+    setPortfolioUpdated(true);
+    if (portfolioUpdatedTimer.current) clearTimeout(portfolioUpdatedTimer.current);
+    portfolioUpdatedTimer.current = setTimeout(() => setPortfolioUpdated(false), 3000);
+  }
+
   function toggleCard(id: ActiveModal) {
     setExpandedCard((prev) => (prev === id ? null : id));
   }
@@ -1158,6 +1195,8 @@ function SettingsInner() {
           clientId={clientId!}
           calibrationInput={calibrationInput} setCalibrationInput={setCalibrationInput}
           isCalibrating={isCalibrating} onCalibrate={handleCalibrationApply}
+          onOpenVolumeModal={() => setShowVolumeModal(true)}
+          portfolioUpdated={portfolioUpdated}
         />
 
         {/* Right panel — config + tracking + actions */}
@@ -1359,6 +1398,15 @@ function SettingsInner() {
           isRegenerating={isRegenerating}
         />
       )}
+
+      {/* Query volume modal */}
+      <QueryVolumeModal
+        open={showVolumeModal}
+        onClose={() => setShowVolumeModal(false)}
+        currentCounts={currentCounts}
+        clientId={clientId!}
+        onRegenerated={handleVolumeRegenerated}
+      />
     </>
   );
 }

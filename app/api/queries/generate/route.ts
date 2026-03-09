@@ -16,7 +16,12 @@ export async function POST(request: Request) {
     const { data: { user } } = await supabase.auth.getUser();
     if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
-    const { clientId, trigger = "manual_regeneration", versionName } = await request.json() as { clientId: string; trigger?: VersionTrigger; versionName?: string };
+    const { clientId, trigger = "manual_regeneration", versionName, countsPerIntent } = await request.json() as {
+      clientId: string;
+      trigger?: VersionTrigger;
+      versionName?: string;
+      countsPerIntent?: Partial<Record<import("@/types").QueryIntent, number>>;
+    };
     if (!clientId) return NextResponse.json({ error: "clientId required" }, { status: 400 });
 
     // Fetch full client context + brand facts for anchoring validation queries
@@ -60,7 +65,7 @@ export async function POST(request: Request) {
     // Pass brand facts if available — validation queries will be anchored to specific claims.
     // If none exist, validation queries fall back to generic criteria-based generation.
     const brandFacts = (factsRes.data ?? []) as BrandFact[];
-    const queries = await generateQueries(ctx, brandFacts.length > 0 ? brandFacts : undefined);
+    const queries = await generateQueries(ctx, brandFacts.length > 0 ? brandFacts : undefined, countsPerIntent);
 
     // Service client for all writes — session JWT can go stale during the 60-90s
     // LLM work above, so every write below uses svc to bypass RLS.
