@@ -267,6 +267,22 @@ function BlueprintInner() {
                           </button>
                         </div>
 
+                        {/* Data strip — mention rate + cluster */}
+                        {(task.mention_rate_at_generation != null || task.source_cluster_name) && (
+                          <div className="flex flex-wrap items-center gap-1.5 mt-1">
+                            {task.mention_rate_at_generation != null && (
+                              <span className="inline-flex items-center text-[10px] font-medium text-[#6B7280] bg-[#F4F6F9] border border-[#E2E8F0] rounded-full px-2 py-0.5">
+                                {Math.round(task.mention_rate_at_generation)}% mention rate
+                              </span>
+                            )}
+                            {task.source_cluster_name && (
+                              <span className="inline-flex items-center text-[10px] font-medium text-[#9CA3AF] bg-[#F4F6F9] border border-[#E2E8F0] rounded-full px-2 py-0.5">
+                                {task.source_cluster_name}
+                              </span>
+                            )}
+                          </div>
+                        )}
+
                         {/* Title */}
                         <p className="text-[15px] font-bold text-[#0D0437] leading-snug mb-2">
                           {task.title}

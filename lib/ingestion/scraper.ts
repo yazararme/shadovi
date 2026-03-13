@@ -15,9 +15,10 @@ export async function scrapeUrl(url: string): Promise<string> {
     } as Parameters<typeof app.scrapeUrl>[1]);
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : String(err);
-    // Surface 402 (quota exhausted) and 403 (blocked) so callers can offer manual fallback
+    // Surface 402 (quota exhausted), 403 (blocked), and 408 (timeout) so callers can offer manual fallback
     if (msg.includes("402")) throw new Error(`402: ${msg}`);
     if (msg.includes("403") || msg.toLowerCase().includes("forbidden")) throw new Error(`403: ${msg}`);
+    if (msg.includes("408") || msg.toLowerCase().includes("timeout")) throw new Error(`408: ${msg}`);
     throw err;
   }
 
