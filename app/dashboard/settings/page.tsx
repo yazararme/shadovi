@@ -635,6 +635,11 @@ function FactsModal({ data, clientId, onSave, onClose }: {
           <textarea value={newClaim} onChange={(e) => setNewClaim(e.target.value)} rows={2}
             placeholder="Fact claim…"
             className="w-full text-sm border border-[#E2E8F0] rounded-lg px-3 py-2 outline-none focus:border-[#0D0437] resize-none placeholder:text-[#9CA3AF]" />
+          {!newIsTrue && (
+            <p className="text-[11px] text-[#9CA3AF] leading-relaxed -mt-0.5">
+              For accurate BVI scoring, false claims should describe something the brand does not offer at all — not a feature that exists but is exaggerated. Example: &ldquo;Beko washing machines have a self-cleaning drum cycle&rdquo; (if untrue), not &ldquo;all Beko washing machines have WiFi&rdquo;.
+            </p>
+          )}
           <div className="flex items-center gap-2 flex-wrap">
             <select value={newCategory} onChange={(e) => setNewCategory(e.target.value as BrandFactCategory)}
               className="text-xs border border-[#E2E8F0] rounded-lg px-2 py-1.5 outline-none focus:border-[#0D0437] bg-white">

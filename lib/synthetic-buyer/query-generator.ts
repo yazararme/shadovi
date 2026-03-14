@@ -186,7 +186,9 @@ function ensureMinBaitQueries(
   factLookup: Map<string, BrandFact>,
   validationCap: number = DEFAULT_PER_INTENT
 ): GeneratedQuery[] {
-  const baitCount = queries.filter((q) => q.is_bait).length;
+  // Only count validation-intent bait queries — bait on other intents is a
+  // side-effect of fact_id misalignment and doesn't serve as real BVI testing.
+  const baitCount = queries.filter((q) => q.is_bait && q.intent === "validation").length;
   if (baitCount >= MIN_BAIT_QUERIES) return queries;
 
   // Collect bait facts not already backing an existing bait query
@@ -435,12 +437,25 @@ export async function calibrateQueries(
       });
   }
 
-  // Restore fact_ids from generation pass (critic strips them)
+  // Restore fact_ids from generation pass — match by intent (validation only) rather
+  // than blind index, same fix as generateQueries to prevent cross-intent contamination.
   const criticResult = QueryArraySchema.safeParse(criticParsed);
   const criticBase = criticResult.success ? criticResult.data : genResult.data;
-  const finalQueries = criticBase.map((q, i) => ({
+  const genValFactIds = genResult.data
+    .filter(q => q.intent === "validation")
+    .map(q => q.fact_id);
+  const criticValCount = criticBase.filter(q => q.intent === "validation").length;
+  if (criticValCount !== genValFactIds.length) {
+    console.warn(
+      `[query-generator] calibrate: critic returned ${criticValCount} validation queries vs ${genValFactIds.length} from generation — fact_id alignment may be imperfect`
+    );
+  }
+  let vIdx = 0;
+  const finalQueries = criticBase.map(q => ({
     ...q,
-    fact_id: genResult.data[i]?.fact_id,
+    fact_id: q.intent === "validation" && vIdx < genValFactIds.length
+      ? genValFactIds[vIdx++]
+      : undefined,
   }));
 
   // Cap each intent at 8 by relevance score, filter to only requested intents
@@ -480,7 +495,9 @@ export async function calibrateQueries(
 
   // Only enforce bait minimum when validation intent is being regenerated
   if (intents.includes("validation")) {
-    return ensureMinBaitQueries(result, factLookup, 8);
+    const final = ensureMinBaitQueries(result, factLookup, 8);
+    console.log(`[query-generator] Calibrated ${final.length} queries, ${final.filter(q => q.is_bait).length} bait`);
+    return final;
   }
   return result;
 }
@@ -573,11 +590,24 @@ export async function generateQueries(
 
   const criticResult = QueryArraySchema.safeParse(criticParsed);
   // Restore fact_ids from generation pass — critic stripped them and must not set them.
-  // Index alignment holds because the critic prompt returns the same queries in order.
+  // Match by intent (validation only) rather than blind index — critic can reorder across
+  // intents, which would assign bait fact_ids to non-validation queries and break BVI.
   const criticBase = criticResult.success ? criticResult.data : genResult.data;
-  const finalQueries = criticBase.map((q, i) => ({
+  const genValFactIds = genResult.data
+    .filter(q => q.intent === "validation")
+    .map(q => q.fact_id);
+  const criticValCount = criticBase.filter(q => q.intent === "validation").length;
+  if (criticValCount !== genValFactIds.length) {
+    console.warn(
+      `[query-generator] generate: critic returned ${criticValCount} validation queries vs ${genValFactIds.length} from generation — fact_id alignment may be imperfect`
+    );
+  }
+  let vIdx = 0;
+  const finalQueries = criticBase.map(q => ({
     ...q,
-    fact_id: genResult.data[i]?.fact_id,
+    fact_id: q.intent === "validation" && vIdx < genValFactIds.length
+      ? genValFactIds[vIdx++]
+      : undefined,
   }));
 
   // Cap each intent at the requested count (default 10), keeping highest-scoring queries.
@@ -630,5 +660,7 @@ export async function generateQueries(
   // broke index alignment, bait designation is lost. This injects deterministic
   // bait queries from is_true=false facts so every generation has hallucination detection.
   const valCap = countsPerIntent?.validation ?? DEFAULT_PER_INTENT;
-  return ensureMinBaitQueries(result, factLookup, valCap);
+  const final = ensureMinBaitQueries(result, factLookup, valCap);
+  console.log(`[query-generator] Generated ${final.length} queries, ${final.filter(q => q.is_bait).length} bait`);
+  return final;
 }
