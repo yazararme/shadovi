@@ -4,7 +4,7 @@ import { useEffect, useState, useCallback, Suspense } from "react";
 import { useSearchParams } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
 import { Skeleton } from "@/components/ui/skeleton";
-import { X, ChevronDown, ChevronUp } from "lucide-react";
+import { X } from "lucide-react";
 import type { Recommendation, RecommendationType } from "@/types";
 
 const PRIORITY_CONFIG: Record<number, { bg: string; text: string; label: string }> = {
@@ -217,138 +217,130 @@ function BlueprintInner() {
                   const priConfig = getPriorityConfig(task.priority);
                   const isDone = task.status === "done" || task.status === "dismissed";
 
+                  const isP2 = task.priority === 2;
+                  const accentColor = isP2 ? "#7B5EA7" : "#FF4B6E";
+                  const clusterSuffix = task.source_cluster_name
+                    ?? (isP2 ? "Moderate visibility gap" : "High displacement velocity");
+                  const firstSentence = task.rationale.split(". ")[0] + ".";
+                  const metricLabel =
+                    type === "content_directive" ? "brand mention rate"
+                    : type === "entity_foundation" ? "visibility score"
+                    : "mention rate";
+
                   return (
                     <div
                       key={task.id}
-                      className={`border border-[#E2E8F0] rounded-lg bg-white transition-opacity ${
+                      className={`border border-[#E2E8F0] rounded-[14px] bg-white overflow-hidden transition-opacity ${
                         isDone ? "opacity-40" : ""
                       }`}
                       tabIndex={0}
                       role="article"
-                      onKeyDown={(e) => {
-                        if (e.key === "Enter") toggleExpand(task.id);
-                      }}
                     >
-                      {/* Card body */}
-                      <div className="p-5">
-                        {/* Header: priority badge + type badge + status + expand toggle */}
-                        <div className="flex items-start justify-between gap-3 mb-3">
-                          <div className="flex items-center gap-2 flex-wrap">
-                            {/* Priority badge */}
+                      <div className="grid" style={{ gridTemplateColumns: "120px 1fr" }}>
+                        {/* LEFT COLUMN — dark metric panel */}
+                        <div className="bg-[#0D0437] flex flex-col items-center justify-center min-h-[130px] px-2">
+                          <span
+                            className="text-[36px] font-semibold leading-none"
+                            style={{ color: isP2 ? "#00B4D8" : "#FF4B6E" }}
+                          >
+                            {task.mention_rate_at_generation != null
+                              ? Math.round(task.mention_rate_at_generation) + "%"
+                              : "—"}
+                          </span>
+                          <span className="text-white/60 text-[10px] uppercase text-center leading-[1.3] mt-1">
+                            {metricLabel}
+                          </span>
+                        </div>
+
+                        {/* RIGHT COLUMN */}
+                        <div className="px-5 pt-4 pb-3.5">
+                          {/* Tags row */}
+                          <div className="flex items-center gap-2 flex-wrap mb-2">
                             <span
-                              className={`text-[9px] font-bold tracking-[1.5px] uppercase px-2 py-0.5 rounded ${priConfig.bg} ${priConfig.text}`}
+                              className={`text-[9px] font-bold tracking-[1.5px] uppercase px-2 py-0.5 rounded ${
+                                isP2
+                                  ? "bg-[rgba(123,94,167,0.1)] text-[#7B5EA7]"
+                                  : "bg-[rgba(255,75,110,0.1)] text-[#FF4B6E]"
+                              }`}
                             >
                               {priConfig.label}
                             </span>
-                            {/* Type badge */}
                             <span
                               className={`text-[9px] font-bold tracking-[1.5px] uppercase px-2 py-0.5 rounded ${config.typeColor}`}
                             >
                               {config.label}
                             </span>
-                            {/* Status badge */}
-                            <span
-                              className={`text-[9px] font-bold tracking-[1.5px] uppercase px-2 py-0.5 rounded ${STATUS_BADGE[task.status]}`}
-                            >
-                              {task.status.replace("_", " ")}
+                            <span className="text-[10px] text-[#9CA3AF]">
+                              · {clusterSuffix}
                             </span>
                           </div>
-                          <button
-                            type="button"
-                            onClick={() => toggleExpand(task.id)}
-                            className="text-[#6B7280] hover:text-[#0D0437] transition-colors shrink-0"
-                            aria-label={isExpanded ? "Collapse" : "Expand"}
+
+                          {/* Title */}
+                          <p className="text-[15px] font-semibold text-[#0D0437] leading-snug mb-2">
+                            {task.title}
+                          </p>
+
+                          {/* Description — 2-line clamp */}
+                          <p className="text-[13px] text-[#374151] leading-[1.75] line-clamp-2">
+                            {task.description}
+                          </p>
+
+                          {/* Threat section */}
+                          <div
+                            className="mt-3 pl-3 border-l-2"
+                            style={{ borderColor: accentColor }}
                           >
-                            {isExpanded ? (
-                              <ChevronUp className="h-4 w-4" />
-                            ) : (
-                              <ChevronDown className="h-4 w-4" />
-                            )}
-                          </button>
-                        </div>
-
-                        {/* Data strip — mention rate + cluster */}
-                        {(task.mention_rate_at_generation != null || task.source_cluster_name) && (
-                          <div className="flex flex-wrap items-center gap-1.5 mt-1">
-                            {task.mention_rate_at_generation != null && (
-                              <span className="inline-flex items-center text-[10px] font-medium text-[#6B7280] bg-[#F4F6F9] border border-[#E2E8F0] rounded-full px-2 py-0.5">
-                                {Math.round(task.mention_rate_at_generation)}% mention rate
-                              </span>
-                            )}
-                            {task.source_cluster_name && (
-                              <span className="inline-flex items-center text-[10px] font-medium text-[#9CA3AF] bg-[#F4F6F9] border border-[#E2E8F0] rounded-full px-2 py-0.5">
-                                {task.source_cluster_name}
-                              </span>
-                            )}
-                          </div>
-                        )}
-
-                        {/* Title */}
-                        <p className="text-[15px] font-bold text-[#0D0437] leading-snug mb-2">
-                          {task.title}
-                        </p>
-
-                        {/* Description — always visible */}
-                        <p className="text-[13px] text-[#374151] leading-[1.75]">
-                          {task.description}
-                        </p>
-                      </div>
-
-                      {/* Expanded: rationale + step-by-step */}
-                      {isExpanded && (
-                        <div className="border-t border-[#E2E8F0] px-5 py-4 space-y-4 bg-[#F4F6F9] rounded-b-lg">
-                          {/* Why */}
-                          <div>
-                            <p className="text-[9px] font-bold tracking-[2px] uppercase text-[#6B7280] mb-1.5">
-                              Why this matters
+                            <p
+                              className="text-[10px] font-bold uppercase mb-1"
+                              style={{ color: accentColor, letterSpacing: "0.07em" }}
+                            >
+                              The Threat
                             </p>
                             <p className="text-[12px] text-[#6B7280] leading-[1.7]">
-                              {task.rationale}
+                              {isExpanded ? task.rationale : firstSentence}
                             </p>
-                          </div>
-
-                          {/* How to execute */}
-                          <div>
-                            <p className="text-[9px] font-bold tracking-[2px] uppercase text-[#6B7280] mb-2">
-                              How to execute
-                            </p>
-                            <ol className="space-y-2">
-                              {config.actions.map((step, i) => (
-                                <li key={i} className="flex gap-3">
-                                  <span className="h-5 w-5 rounded-full bg-white text-[#0D0437] text-[10px] font-bold flex items-center justify-center shrink-0 mt-0.5 border border-[#E2E8F0]">
-                                    {i + 1}
-                                  </span>
-                                  <span className="text-[12px] text-[#374151] leading-[1.7]">{step}</span>
-                                </li>
-                              ))}
-                            </ol>
-                          </div>
-                        </div>
-                      )}
-
-                      {/* Action buttons row */}
-                      {!isDone && (
-                        <div className="flex gap-2 px-5 pb-4 pt-1">
-                          {transition && (
                             <button
                               type="button"
-                              onClick={() => setPanelTask(task)}
-                              className="text-[11px] font-bold px-3 py-1.5 rounded bg-[#0D0437] text-white hover:bg-[#1a1150] transition-colors"
+                              onClick={() => toggleExpand(task.id)}
+                              className="text-[11px] font-medium mt-1 hover:opacity-70 transition-opacity"
+                              style={{ color: accentColor }}
                             >
-                              {transition.label}
+                              {isExpanded ? "Hide ↑" : "See full breakdown →"}
                             </button>
-                          )}
-                          {task.status === "open" && (
-                            <button
-                              type="button"
-                              onClick={() => updateStatus(task.id, "dismissed")}
-                              className="text-[11px] font-bold px-3 py-1.5 rounded border border-[#E2E8F0] text-[#6B7280] hover:border-[#0D0437] hover:text-[#0D0437] transition-colors"
-                            >
-                              Dismiss
-                            </button>
+                          </div>
+
+                          {/* Action buttons */}
+                          {!isDone && (
+                            <div className="flex items-center gap-2 mt-4">
+                              <button
+                                type="button"
+                                onClick={() => setPanelTask(task)}
+                                className="text-[12px] font-bold px-4 py-2 rounded-[7px] bg-[#0D0437] text-white hover:bg-[#1a1150] transition-colors"
+                              >
+                                Copy as Content Brief
+                              </button>
+                              {transition && (
+                                <button
+                                  type="button"
+                                  onClick={() => updateStatus(task.id, transition.next)}
+                                  className="text-[12px] font-bold px-4 py-2 rounded-[7px] border border-[#E2E8F0] text-[#6B7280] hover:text-[#0D0437] hover:border-[#0D0437] transition-colors"
+                                >
+                                  {transition.label}
+                                </button>
+                              )}
+                              {task.status === "open" && (
+                                <button
+                                  type="button"
+                                  onClick={() => updateStatus(task.id, "dismissed")}
+                                  className="text-[12px] font-medium text-[#9CA3AF] hover:text-[#6B7280] transition-colors ml-auto"
+                                >
+                                  Dismiss
+                                </button>
+                              )}
+                            </div>
                           )}
                         </div>
-                      )}
+                      </div>
                     </div>
                   );
                 })}
