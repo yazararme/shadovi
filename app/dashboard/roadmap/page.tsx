@@ -8,10 +8,10 @@ import { createClient } from "@/lib/supabase/client";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Copy, Play, Check, RotateCcw } from "lucide-react";
 
-const METRIC_LABELS: Record<RecommendationType, string> = {
-  content_directive:  "brand mention rate",
-  entity_foundation:  "visibility score",
-  placement_strategy: "mention rate",
+const TYPE_ICON: Record<RecommendationType, string> = {
+  content_directive:  "CONTENT",
+  entity_foundation:  "ENTITY",
+  placement_strategy: "PLACEMENT",
 };
 import { toast } from "sonner";
 import type { Client, Recommendation, RecommendationType } from "@/types";
@@ -148,18 +148,10 @@ function RecCard({
       className="border border-[#E2E8F0] rounded-[14px] overflow-hidden"
     >
       <div className="grid" style={{ gridTemplateColumns: "120px 1fr" }}>
-        {/* LEFT COLUMN — dark metric panel */}
-        <div className="bg-[#0D0437] flex flex-col items-center justify-center min-h-[130px] px-2">
-          <span
-            className="text-[36px] font-semibold leading-none"
-            style={{ color: isP2 ? "#00B4D8" : "#FF4B6E" }}
-          >
-            {rec.mention_rate_at_generation != null
-              ? Math.round(rec.mention_rate_at_generation) + "%"
-              : "—"}
-          </span>
-          <span className="text-white/60 text-[10px] uppercase text-center leading-[1.3] mt-1">
-            {METRIC_LABELS[rec.type]}
+        {/* LEFT COLUMN — dark type panel */}
+        <div className="bg-[#0D0437] flex items-center justify-center min-h-[130px] px-2">
+          <span className="text-white/50 text-[11px] uppercase tracking-[0.1em] font-medium">
+            {TYPE_ICON[rec.type]}
           </span>
         </div>
 
