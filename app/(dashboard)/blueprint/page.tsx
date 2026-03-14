@@ -53,6 +53,12 @@ const TYPE_CONFIG: Record<
   },
 };
 
+const TYPE_ICON: Record<RecommendationType, string> = {
+  content_directive: "CONTENT",
+  entity_foundation: "ENTITY",
+  placement_strategy: "PLACEMENT",
+};
+
 const STATUS_TRANSITIONS: Record<
   string,
   { label: string; next: string } | null
@@ -222,10 +228,6 @@ function BlueprintInner() {
                   const clusterSuffix = task.source_cluster_name
                     ?? (isP2 ? "Moderate visibility gap" : "High displacement velocity");
                   const firstSentence = task.rationale.split(". ")[0] + ".";
-                  const metricLabel =
-                    type === "content_directive" ? "brand mention rate"
-                    : type === "entity_foundation" ? "visibility score"
-                    : "mention rate";
 
                   return (
                     <div
@@ -237,18 +239,10 @@ function BlueprintInner() {
                       role="article"
                     >
                       <div className="grid" style={{ gridTemplateColumns: "120px 1fr" }}>
-                        {/* LEFT COLUMN — dark metric panel */}
-                        <div className="bg-[#0D0437] flex flex-col items-center justify-center min-h-[130px] px-2">
-                          <span
-                            className="text-[36px] font-semibold leading-none"
-                            style={{ color: isP2 ? "#00B4D8" : "#FF4B6E" }}
-                          >
-                            {task.mention_rate_at_generation != null
-                              ? Math.round(task.mention_rate_at_generation) + "%"
-                              : "—"}
-                          </span>
-                          <span className="text-white/60 text-[10px] uppercase text-center leading-[1.3] mt-1">
-                            {metricLabel}
+                        {/* LEFT COLUMN — dark type panel */}
+                        <div className="bg-[#0D0437] flex items-center justify-center min-h-[130px] px-2">
+                          <span className="text-white/50 text-[11px] uppercase tracking-[0.1em] font-medium">
+                            {TYPE_ICON[task.type]}
                           </span>
                         </div>
 
