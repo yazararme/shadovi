@@ -6,17 +6,17 @@ import { useClientContext } from "@/context/ClientContext";
 import Link from "next/link";
 import { createClient } from "@/lib/supabase/client";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Copy, X, Play, Check, RotateCcw } from "lucide-react";
+import { Copy, Play, Check, RotateCcw } from "lucide-react";
+
+const METRIC_LABELS: Record<RecommendationType, string> = {
+  content_directive:  "brand mention rate",
+  entity_foundation:  "visibility score",
+  placement_strategy: "mention rate",
+};
 import { toast } from "sonner";
 import type { Client, Recommendation, RecommendationType } from "@/types";
 
 // ─── Constants ────────────────────────────────────────────────────────────────
-
-const PRIORITY_BADGE: Record<number, string> = {
-  1: "bg-[rgba(255,75,110,0.1)] text-[#FF4B6E] border-[rgba(255,75,110,0.2)]",
-  2: "bg-[rgba(245,158,11,0.1)] text-[#F59E0B] border-[rgba(245,158,11,0.2)]",
-};
-const PRIORITY_BADGE_DEFAULT = "bg-[#F4F6F9] text-[#6B7280] border-[#E2E8F0]";
 
 const TYPE_LABELS: Record<RecommendationType, string> = {
   content_directive:  "CONTENT DIRECTIVE",
@@ -134,148 +134,148 @@ function RecCard({
   const baseOpacity = variant === "dismissed" ? 0.4 : variant === "done" ? 0.6 : 1;
   const opacity = isFading ? 0 : baseOpacity;
 
-  const clusterLabel = rec.source_cluster_name
-    ?? (rec.query_id ? queryClusterMap.get(rec.query_id) : undefined);
-
-  const statusBadge = (() => {
-    switch (variant) {
-      case "in_progress":
-        return (
-          <span className="text-[9px] font-bold uppercase tracking-wide px-2 py-0.5 rounded border bg-[rgba(0,180,216,0.08)] text-[#0077A8] border-[rgba(0,180,216,0.2)]">
-            In Progress
-          </span>
-        );
-      case "done":
-        return (
-          <span className="text-[9px] font-bold uppercase tracking-wide px-2 py-0.5 rounded border bg-[rgba(26,143,92,0.08)] text-[#1A8F5C] border-[rgba(26,143,92,0.2)]">
-            Done
-          </span>
-        );
-      case "dismissed":
-        return (
-          <span className="text-[9px] font-bold uppercase tracking-wide px-2 py-0.5 rounded border bg-[rgba(107,114,128,0.08)] text-[#6B7280] border-[rgba(107,114,128,0.2)]">
-            Dismissed
-          </span>
-        );
-      default:
-        return (
-          <span className="text-[9px] font-bold uppercase tracking-wide px-2 py-0.5 rounded border bg-[rgba(26,143,92,0.08)] text-[#1A8F5C] border-[rgba(26,143,92,0.2)]">
-            Open
-          </span>
-        );
-    }
-  })();
+  const isP2 = rec.priority === 2;
+  const accentColor = isP2 ? "#7B5EA7" : "#FF4B6E";
+  const clusterSuffix = rec.source_cluster_name
+    ?? (rec.query_id ? queryClusterMap.get(rec.query_id) : undefined)
+    ?? (isP2 ? "Moderate visibility gap" : "High displacement velocity");
+  const firstSentence = rec.rationale.split(". ")[0] + ".";
 
   return (
     <div
       ref={cardRef}
       style={{ backgroundColor: cardBg, transition: cardTransition, opacity }}
-      className="border border-[#E2E8F0] rounded-lg p-6 overflow-hidden"
+      className="border border-[#E2E8F0] rounded-[14px] overflow-hidden"
     >
-      {/* Badge row */}
-      <div className="flex items-center gap-2 flex-wrap mb-3">
-        <span
-          className={`text-[9px] font-bold uppercase tracking-wide px-2 py-0.5 rounded border ${
-            PRIORITY_BADGE[rec.priority] ?? PRIORITY_BADGE_DEFAULT
-          }`}
-        >
-          P{rec.priority}
-        </span>
-        <span
-          className={`text-[9px] font-bold uppercase tracking-wide px-2 py-0.5 rounded border ${
-            TYPE_BADGE[rec.type] ?? TYPE_BADGE.content_directive
-          }`}
-        >
-          {TYPE_LABELS[rec.type] ?? rec.type}
-        </span>
-        {statusBadge}
-        {clusterLabel && (
-          <span className="text-[9px] font-bold uppercase tracking-wide px-2 py-0.5 rounded border bg-[rgba(13,4,55,0.06)] text-[#0D0437] border-[rgba(13,4,55,0.15)]">
-            {clusterLabel}
+      <div className="grid" style={{ gridTemplateColumns: "120px 1fr" }}>
+        {/* LEFT COLUMN — dark metric panel */}
+        <div className="bg-[#0D0437] flex flex-col items-center justify-center min-h-[130px] px-2">
+          <span
+            className="text-[36px] font-semibold leading-none"
+            style={{ color: isP2 ? "#00B4D8" : "#FF4B6E" }}
+          >
+            {rec.mention_rate_at_generation != null
+              ? Math.round(rec.mention_rate_at_generation) + "%"
+              : "—"}
           </span>
-        )}
-      </div>
-
-      {/* Title — always shown */}
-      <h2 className="text-[16px] font-bold text-[#0D0437] leading-snug mb-2">{rec.title}</h2>
-
-      {/* Description — hidden for dismissed (minimal footprint) */}
-      {variant !== "dismissed" && (
-        <p className="text-[13px] text-[#374151] leading-relaxed mb-3">{rec.description}</p>
-      )}
-
-      {/* Rationale inset — hidden for done and dismissed */}
-      {variant !== "done" && variant !== "dismissed" && (
-        <Link
-          href={`/dashboard/share-of-voice${clientIdParam ? `?client=${clientIdParam}` : ""}#gap-clusters`}
-          className="block bg-[#F4F6F9] border border-[#E2E8F0] rounded-md px-4 py-3 mb-4 hover:bg-[#EDEEF2] hover:border-[#C7CBD6] transition-colors group"
-        >
-          <p className="text-[10px] font-bold uppercase tracking-[1.5px] text-[#9CA3AF] mb-1">
-            The Threat
-          </p>
-          <p className="text-[12px] text-[#6B7280] leading-relaxed">{rec.rationale}</p>
-          <span className="inline-block mt-1.5 text-[11px] text-[#9CA3AF] group-hover:text-[#0D0437] transition-colors">
-            See more details →
+          <span className="text-white/60 text-[10px] uppercase text-center leading-[1.3] mt-1">
+            {METRIC_LABELS[rec.type]}
           </span>
-        </Link>
-      )}
+        </div>
 
-      {/* Action buttons */}
-      <div className="flex items-center gap-2">
-        {/* Copy — shown for active cards and done; not dismissed */}
-        {variant !== "dismissed" && (
-          <button
-            onClick={onCopy}
-            className="flex items-center gap-1.5 px-3 py-1.5 rounded-md text-[11px] font-bold border border-[#E2E8F0] text-[#6B7280] bg-white hover:bg-[#F4F6F9] hover:text-[#0D0437] hover:border-[#0D0437] transition-colors"
-          >
-            <Copy className="h-3 w-3" />
-            Copy as Content Brief
-          </button>
-        )}
+        {/* RIGHT COLUMN */}
+        <div className="px-5 pt-4 pb-3.5">
+          {/* Tags row */}
+          <div className="flex items-center gap-2 flex-wrap mb-2">
+            <span
+              className={`text-[9px] font-bold tracking-[1.5px] uppercase px-2 py-0.5 rounded border ${
+                isP2
+                  ? "bg-[rgba(123,94,167,0.1)] text-[#7B5EA7] border-[rgba(123,94,167,0.2)]"
+                  : "bg-[rgba(255,75,110,0.1)] text-[#FF4B6E] border-[rgba(255,75,110,0.2)]"
+              }`}
+            >
+              P{rec.priority}
+            </span>
+            <span
+              className={`text-[9px] font-bold tracking-[1.5px] uppercase px-2 py-0.5 rounded border ${
+                TYPE_BADGE[rec.type] ?? TYPE_BADGE.content_directive
+              }`}
+            >
+              {TYPE_LABELS[rec.type] ?? rec.type}
+            </span>
+            <span className="text-[10px] text-[#9CA3AF]">
+              · {clusterSuffix}
+            </span>
+          </div>
 
-        {/* Start — open only */}
-        {variant === "open" && (
-          <button
-            onClick={onStart}
-            className="flex items-center gap-1.5 px-3 py-1.5 rounded-md text-[11px] font-bold border border-[#E2E8F0] text-[#9CA3AF] bg-white hover:bg-[rgba(0,180,216,0.08)] hover:text-[#0077A8] hover:border-[rgba(0,180,216,0.3)] transition-colors"
-          >
-            <Play className="h-3 w-3" />
-            Start
-          </button>
-        )}
+          {/* Title */}
+          <h2 className="text-[15px] font-semibold text-[#0D0437] leading-snug mb-2">{rec.title}</h2>
 
-        {/* Dismiss — open only */}
-        {variant === "open" && (
-          <button
-            onClick={onDismiss}
-            className="flex items-center gap-1.5 px-3 py-1.5 rounded-md text-[11px] font-bold border border-[#E2E8F0] text-[#9CA3AF] bg-white hover:bg-[#FFF1F2] hover:text-[#FF4B6E] hover:border-[rgba(255,75,110,0.3)] transition-colors"
-          >
-            <X className="h-3 w-3" />
-            Dismiss
-          </button>
-        )}
+          {/* Description — hidden for dismissed, 2-line clamp */}
+          {variant !== "dismissed" && (
+            <p className="text-[13px] text-[#374151] leading-[1.75] line-clamp-2">{rec.description}</p>
+          )}
 
-        {/* Mark Done — in_progress only */}
-        {variant === "in_progress" && (
-          <button
-            onClick={onMarkDone}
-            className="flex items-center gap-1.5 px-3 py-1.5 rounded-md text-[11px] font-bold border border-[#E2E8F0] text-[#9CA3AF] bg-white hover:bg-[rgba(26,143,92,0.08)] hover:text-[#1A8F5C] hover:border-[rgba(26,143,92,0.3)] transition-colors"
-          >
-            <Check className="h-3 w-3" />
-            Mark Done
-          </button>
-        )}
+          {/* Threat section — hidden for done and dismissed */}
+          {variant !== "done" && variant !== "dismissed" && (
+            <Link
+              href={`/dashboard/share-of-voice${clientIdParam ? `?client=${clientIdParam}` : ""}#gap-clusters`}
+              className="block mt-3 pl-3 border-l-2 group"
+              style={{ borderColor: accentColor }}
+            >
+              <p
+                className="text-[10px] font-bold uppercase mb-1"
+                style={{ color: accentColor, letterSpacing: "0.07em" }}
+              >
+                The Threat
+              </p>
+              <p className="text-[12px] text-[#6B7280] leading-[1.7]">{firstSentence}</p>
+              <span
+                className="inline-block mt-1 text-[11px] font-medium group-hover:opacity-70 transition-opacity"
+                style={{ color: accentColor }}
+              >
+                See full breakdown →
+              </span>
+            </Link>
+          )}
 
-        {/* Reopen — done and dismissed only */}
-        {(variant === "done" || variant === "dismissed") && (
-          <button
-            onClick={onReopen}
-            className="flex items-center gap-1.5 px-3 py-1.5 rounded-md text-[11px] font-bold border border-[#E2E8F0] text-[#9CA3AF] bg-white hover:bg-[#F4F6F9] hover:text-[#0D0437] hover:border-[#0D0437] transition-colors"
-          >
-            <RotateCcw className="h-3 w-3" />
-            Reopen
-          </button>
-        )}
+          {/* Action buttons */}
+          <div className="flex items-center gap-2 mt-4">
+            {/* Copy — shown for active cards and done; not dismissed */}
+            {variant !== "dismissed" && (
+              <button
+                onClick={onCopy}
+                className="flex items-center gap-1.5 text-[12px] font-bold px-4 py-2 rounded-[7px] bg-[#0D0437] text-white hover:bg-[#1a1150] transition-colors"
+              >
+                <Copy className="h-3 w-3" />
+                Copy as Content Brief
+              </button>
+            )}
+
+            {/* Start — open only */}
+            {variant === "open" && (
+              <button
+                onClick={onStart}
+                className="flex items-center gap-1.5 text-[12px] font-bold px-4 py-2 rounded-[7px] border border-[#E2E8F0] text-[#6B7280] hover:text-[#0D0437] hover:border-[#0D0437] transition-colors"
+              >
+                <Play className="h-3 w-3" />
+                Start
+              </button>
+            )}
+
+            {/* Mark Done — in_progress only */}
+            {variant === "in_progress" && (
+              <button
+                onClick={onMarkDone}
+                className="flex items-center gap-1.5 text-[12px] font-bold px-4 py-2 rounded-[7px] border border-[#E2E8F0] text-[#6B7280] hover:text-[#1A8F5C] hover:border-[rgba(26,143,92,0.3)] transition-colors"
+              >
+                <Check className="h-3 w-3" />
+                Mark Done
+              </button>
+            )}
+
+            {/* Reopen — done and dismissed only */}
+            {(variant === "done" || variant === "dismissed") && (
+              <button
+                onClick={onReopen}
+                className="flex items-center gap-1.5 text-[12px] font-bold px-4 py-2 rounded-[7px] border border-[#E2E8F0] text-[#6B7280] hover:text-[#0D0437] hover:border-[#0D0437] transition-colors"
+              >
+                <RotateCcw className="h-3 w-3" />
+                Reopen
+              </button>
+            )}
+
+            {/* Dismiss — open only, plain text, pushed right */}
+            {variant === "open" && (
+              <button
+                onClick={onDismiss}
+                className="text-[12px] font-medium text-[#9CA3AF] hover:text-[#6B7280] transition-colors ml-auto"
+              >
+                Dismiss
+              </button>
+            )}
+          </div>
+        </div>
       </div>
     </div>
   );
