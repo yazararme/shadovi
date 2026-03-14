@@ -2,7 +2,8 @@ import { NextResponse } from "next/server";
 import { createClient, createServiceClient } from "@/lib/supabase/server";
 import { generateQueries } from "@/lib/synthetic-buyer/query-generator";
 import { createPortfolioVersion } from "@/lib/versioning/create-version";
-import type { ClientContext, BrandFact, VersionTrigger } from "@/types";
+import { callHaiku } from "@/lib/llm/anthropic";
+import type { ClientContext, BrandDNA, BrandFact, BrandFactCategory, VersionTrigger } from "@/types";
 
 // Auth: session check → service write
 
@@ -64,7 +65,63 @@ export async function POST(request: Request) {
 
     // Pass brand facts if available — validation queries will be anchored to specific claims.
     // If none exist, validation queries fall back to generic criteria-based generation.
-    const brandFacts = (factsRes.data ?? []) as BrandFact[];
+    let brandFacts = (factsRes.data ?? []) as BrandFact[];
+
+    // Auto-generate false claim tests if none exist — bait queries require is_true=false
+    // brand facts for BVI scoring. Without them, ensureMinBaitQueries has nothing to inject.
+    const hasFalseClaims = brandFacts.some((f) => !f.is_true);
+    if (!hasFalseClaims && clientRes.data.brand_dna) {
+      const dna = clientRes.data.brand_dna as BrandDNA;
+      const falseClaimPrompt = `You are a brand strategist. Generate exactly 2 false claim tests for the brand "${dna.brand_name}" (${dna.category_name}).
+
+These are plausible-sounding things this brand does NOT offer — competitor features or adjacent-category capabilities that an AI could realistically confuse or hallucinate.
+
+Brand context:
+- Product: ${dna.product_description}
+- Key products: ${dna.key_products.map((p) => p.name).join(", ")}
+- Differentiators: ${dna.differentiators.join(", ")}
+
+Return ONLY a JSON array of exactly 2 objects:
+[{ "claim": "specific false claim", "category": "feature" }]
+
+Rules:
+- Claims must be specific and testable, not vague
+- Claims must be plausible — something an AI might confirm if it hallucinated
+- category must be one of: feature, market, pricing, messaging
+- Return ONLY valid JSON. No markdown, no explanation.`;
+
+      try {
+        const raw = await callHaiku(falseClaimPrompt);
+        const cleaned = raw.replace(/^```(?:json)?\n?/i, "").replace(/\n?```$/i, "").trim();
+        const parsed = JSON.parse(cleaned) as { claim: string; category: BrandFactCategory }[];
+        const validCategories = new Set(["feature", "market", "pricing", "messaging"]);
+        const toInsert = parsed
+          .filter((f) => f.claim?.trim() && validCategories.has(f.category))
+          .slice(0, 2)
+          .map((f) => ({
+            client_id: clientId,
+            claim: f.claim.trim(),
+            category: f.category,
+            is_true: false,
+          }));
+
+        if (toInsert.length > 0) {
+          const svcForFacts = createServiceClient();
+          const { data: newFacts } = await svcForFacts
+            .from("brand_facts")
+            .insert(toInsert)
+            .select();
+          if (newFacts) {
+            brandFacts = [...brandFacts, ...(newFacts as BrandFact[])];
+            console.log(`[queries/generate] Auto-generated ${newFacts.length} false claim tests for BVI`);
+          }
+        }
+      } catch (err) {
+        // Non-fatal — query generation proceeds without bait queries
+        console.warn("[queries/generate] Failed to auto-generate false claims:", err instanceof Error ? err.message : err);
+      }
+    }
+
     const queries = await generateQueries(ctx, brandFacts.length > 0 ? brandFacts : undefined, countsPerIntent);
 
     // Service client for all writes — session JWT can go stale during the 60-90s
