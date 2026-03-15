@@ -34,9 +34,10 @@ export async function proxy(request: NextRequest) {
   const isAuthRoute = pathname.startsWith("/login") || pathname.startsWith("/signup");
   const isApiRoute = pathname.startsWith("/api");
   const isAuthCallback = pathname.startsWith("/auth/callback");
+  const isLandingPage = pathname === "/";
 
-  // Let API routes and auth callback through without redirect
-  if (isApiRoute || isAuthCallback) {
+  // Let API routes, auth callback, and public landing page through without redirect
+  if (isApiRoute || isAuthCallback || isLandingPage) {
     return supabaseResponse;
   }
 

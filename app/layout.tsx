@@ -30,7 +30,7 @@ const playfair = Playfair_Display({
 const exo2 = Exo_2({
   subsets: ["latin"],
   variable: "--font-exo2",
-  weight: ["900"],
+  weight: ["300", "400", "500", "600", "700", "800", "900"],
 });
 
 export const metadata: Metadata = {
